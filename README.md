@@ -145,6 +145,46 @@ ws.send(msgpack.packb({"changePipelineSetting":
 Note the `cameraSettings` broadcast lags by a second or two, so reading a value straight
 back can show the old one even though the change applied.
 
+### set_streams.py — 19 ms of latency you are paying for nothing
+
+PhotonVision copies, draws and JPEG-encodes its camera streams on **every frame,
+whether or not anyone is connected**. Closing the dashboard does not help. On a
+Pi 5 / OV9281 at 1280x800, measured over 4 interleaved 60-second A/B cycles:
+
+| streams | latency | fps |
+|---|---|---|
+| on (default) | 59.7 ms | 55.9 |
+| off | 41.0 ms | 60.1 |
+| | **−18.7 ms** | **+4.3** |
+
+For scale, the whole AprilTag detection stage costs 11.6 ms on the same rig — so
+the stream you are not watching costs more than the work you actually want.
+
+The dashboard cannot turn this off: its stream selector requires at least one
+stream to stay selected. The websocket API can.
+
+```sh
+python3 config/set_streams.py --status --measure   # what is set, what it costs
+python3 config/set_streams.py --off                # match
+python3 config/set_streams.py --on                 # pit
+python3 config/set_streams.py --daemon             # let the robot decide
+```
+
+Applies live, no service restart. It reads the setting back and fails loudly if it
+did not take.
+
+Daemon mode follows NetworkTables so the robot can shed the streams itself:
+
+| topic | direction | meaning |
+|---|---|---|
+| `/PhotonStreams/enable` | robot writes | `true` = on, `false` = off |
+| `/PhotonStreams/state` | published | what is actually applied |
+| `/PhotonStreams/latencyMs` | published | measured capture→publish |
+| `/PhotonStreams/fps` | published | measured pipeline rate |
+
+Set `enable=false` in `autonomousInit` and `true` in `disabledInit`; that is the
+whole integration. Streams drop for the match and come back in the pit.
+
 ---
 
 ## A bug worth knowing about
