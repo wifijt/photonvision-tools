@@ -99,12 +99,28 @@ python3 survey/measure_quality.py 30
 
 ---
 
+## Plain-English settings guide
+
+**[SETTINGS.md](SETTINGS.md)** explains what every AprilTag setting actually does, what it
+costs, and which ones depend on where you are. Read that before tuning anything.
+
 ## config/ — edit PhotonVision settings from a script
 
 The web UI cannot be automated and some settings are awkward to reach. These edit
 `photon.sqlite` directly.
 
 **Stop PhotonVision first** — it rewrites config on shutdown and will clobber your edit.
+
+`apply_baseline.py` sets the **structural** settings (decimate, threads, multi-tag,
+rotation and friends) to known-good values, live over the websocket, with a measured
+reason for each. `--explain` prints the reasoning; `--dry-run` shows what would change.
+
+```sh
+python3 config/apply_baseline.py --host photonvision.local --dry-run
+python3 config/apply_baseline.py --explain
+```
+
+The rest edit `photon.sqlite` directly:
 
 ```sh
 sudo systemctl stop photonvision
