@@ -49,6 +49,25 @@ BASELINE = {
         accept a sideways preview."""),
     "cameraAutoExposure": (False, """Auto-exposure optimises for the whole scene, not the
         tags, and drifts. Set exposure explicitly with photontune."""),
+    "cameraBrightness": (40, """Additive image offset. Low values CRUSH the image to black,
+        and nothing downstream recovers it - an exposure tuner will just compensate with a
+        long, blurry exposure and report success. If the picture is black in a lit room,
+        check this before anything else. 40 is the reference-rig value; adjust with
+        --brightness if your camera differs."""),
+    "blur": (0.0, """Gaussian blur applied BEFORE detection. Any non-zero value softens the
+        tag edges the detector depends on. At 3.5 detection stops entirely and NO amount of
+        exposure or gain recovers it - an exposure tuner will sweep its whole range, fail,
+        and correctly tell you it is not an exposure problem. Keep at 0."""),
+    "refineEdges": (True, """Sub-pixel corner refinement. Off, corners land on whole pixels
+        and pose precision collapses - this is the step that makes decimate free, since
+        refinement always runs at full resolution regardless of the search scale."""),
+    "targetModel": ("kAprilTag6p5in_36h11", """Physical tag size. Sets the SCALE of every
+        distance you measure. Wrong here and all ranges are proportionally wrong while
+        looking perfectly self-consistent. 6.5in = 165.1mm is the FRC standard."""),
+    "tagFamily": ("kTag36h11", """FRC uses 36h11. Wrong family = no detections at all."""),
+    "cameraRedGain": (0, """Inert on a monochrome sensor (OV9281 etc - there are no colour
+        channels). Pinned so a stray UI edit cannot affect a colour camera."""),
+    "cameraBlueGain": (0, """See cameraRedGain."""),
 }
 
 NOT_SET_HERE = """
@@ -62,6 +81,8 @@ NOT_SET_HERE = """
 ENUM_ALIASES = {
     "inputImageRotationMode": {"DEG_0": (0, "DEG_0"), "DEG_90_CCW": (1, "DEG_90_CCW"),
                                "DEG_180_CCW": (2, "DEG_180_CCW"), "DEG_270_CCW": (3, "DEG_270_CCW")},
+    "targetModel": {"kAprilTag6p5in_36h11": (7, "kAprilTag6p5in_36h11")},
+    "tagFamily": {"kTag36h11": (0, "kTag36h11")},
 }
 
 
@@ -130,6 +151,8 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default="photonvision.local")
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
+    p.add_argument("--brightness", type=float, default=None,
+                   help="override the baseline cameraBrightness for your camera")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--explain", action="store_true", help="print the reasoning and exit")
     a = p.parse_args()
@@ -139,6 +162,8 @@ def main():
             print("    " + " ".join(why.split()) + "\n")
         print("Deliberately NOT set here:" + NOT_SET_HERE)
         return
+    if a.brightness is not None:
+        BASELINE["cameraBrightness"] = (a.brightness, BASELINE["cameraBrightness"][1])
     filt = {c.strip().lower() for c in a.cameras.split(",")} if a.cameras else None
     asyncio.run(apply(a.host, filt, a.dry_run))
 
