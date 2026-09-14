@@ -209,6 +209,58 @@ whole integration. Streams drop for the match and come back in the pit.
 
 ---
 
+## mount/ — measure where the cameras are, by spinning
+
+Tape-measuring `robotToCamera` is bad for reasons that have nothing to do with
+care: the point you need is the **optical centre inside the lens**, which no ruler
+reaches; the **mounting angles** matter more than the position and cannot be
+measured by hand at all; and any error biases every pose estimate systematically,
+so it never averages out.
+
+Rotate the rig about a fixed vertical axis instead. Every camera traces a circle
+about that same axis, so fitting all the circles **together against one shared
+centre** recovers each camera's radius and bearing at once.
+
+```sh
+python3 mount/calibrate_mount.py record spin.npz 60 --host photonvision.local
+python3 mount/calibrate_mount.py solve  spin.npz --origin-height 1.5415
+```
+
+Sharing the centre is what makes it usable on a real robot: with four cameras no
+single camera sees tags for a whole rotation, and a camera with only a short arc
+still solves because the centre is pinned by the ones that saw a long one. That
+happened on the very first bench run — one camera dropped out a third of the way
+through and the fit absorbed it.
+
+### What needs an anchor
+
+| quantity | anchor? | |
+|---|---|---|
+| radius, scale, relative bearing and yaw | no | differences; scale comes from the tag size |
+| **Z (camera height)** | **yes** | `--origin-height`. A surveyed bench layout puts Z=0 at a **tag**, not the floor. The official FRC layout already uses true heights — pass 0. |
+| **"robot forward"** | **yes** | one straight drive. Not meaningful on a bench. |
+
+### Evening out the arc matters
+
+Least squares weights by sample *count*, so anywhere you pause drags the fit.
+Leaving a 34 s stationary tail in a 60 s run moved the radius by 4 % (344.0 →
+330.5 mm) and made two cameras disagree by 2.4 mm instead of 0.5. The tool now
+bins by angle and caps each bin.
+
+### Accuracy, honestly
+
+Bench: **±5–10 mm on position, ~1° on angles**. The bootstrap will claim ±0.3 mm —
+that is *precision*, not accuracy. These pose estimates carry a viewpoint-dependent
+bias of roughly ±10 mm that averaging at one viewpoint cannot remove.
+
+Validated against a ruler: camera 1's fitted radius implied a 12.8 mm
+entrance-pupil offset inside a 21 mm lens barrel — physically right. Camera 2's
+tape reading implied 22.7 mm, i.e. an optical centre *behind the sensor*, so that
+measurement was wrong rather than the fit. A physical constraint settled what
+2500 frames could not.
+
+---
+
 ## A bug worth knowing about
 
 **`inputImageRotationMode` corrupts the multi-tag pose estimate** on v2026.3.4.
