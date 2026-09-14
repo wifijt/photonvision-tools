@@ -18,16 +18,28 @@ from FIRST. For a practice rig, an off-season setup, or tags stuck on a wall, yo
 make one.
 
 ```sh
+# 0. sanity-check the calibration the solve will use
+python3 survey/photon_calib.py photonvision.local
+
 # 1. record PhotonVision's own detected corners while you move the camera around
-python3 survey/capture_corners.py frames.json 120
+python3 survey/capture_corners.py frames.json 120 --host photonvision.local
 
 # 2. bundle-adjust them into an AprilTagFieldLayout
-python3 survey/solve_layout.py frames.json layout.json 0.1651
+#    (intrinsics are fetched from PhotonVision - never hardcode them)
+python3 survey/solve_layout.py frames.json layout.json 0.1651 --host photonvision.local
 
 # 3. upload (multipart, field name "data")
 curl -X POST -F "data=@layout.json" \
      http://photonvision.local:5800/api/settings/aprilTagFieldLayout
 ```
+
+`tag_size` is the **black square** edge in metres, excluding the white border
+(0.1651 = 6.5 in). It sets the absolute scale of the entire map: get it wrong and
+everything is uniformly wrong while looking perfectly self-consistent.
+
+Calibration is pulled from the running PhotonVision by default, because hardcoding
+intrinsics is a silent failure — the wrong camera matrix yields a map that reprojects
+beautifully and is geometrically wrong. `--fx/--fy/--cx/--cy` override if you must.
 
 Result on the reference rig: **5 tags, 0.211 px per-corner reprojection**, and every tag
 recovered as level to within 0.62° — which matched the physical setup and was never given

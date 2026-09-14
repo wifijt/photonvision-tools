@@ -12,9 +12,30 @@
 import sys,json,numpy as np,cv2
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
-FR=sys.argv[1]; OUT=sys.argv[2]; TAG=float(sys.argv[3]) if len(sys.argv)>3 else 0.1651
-K=np.array([[1105.88,0,616.38],[0,1111.20,393.63],[0,0,1]])
-D=np.array([-0.42056,0.24813,0.00034,-0.00144,-0.08562,0.03356,-0.02389,0.02391])
+import argparse, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ap=argparse.ArgumentParser(
+    description="Bundle-adjust recorded corners into an AprilTagFieldLayout.")
+_ap.add_argument("frames", help="json from capture_corners.py")
+_ap.add_argument("out", help="output AprilTagFieldLayout json")
+_ap.add_argument("tag_size", nargs="?", type=float, default=0.1651,
+                 help="black-square edge in metres (default 0.1651 = 6.5in)")
+_ap.add_argument("--host", default="photonvision.local",
+                 help="fetch calibration from this PhotonVision (default)")
+_ap.add_argument("--fx", type=float); _ap.add_argument("--fy", type=float)
+_ap.add_argument("--cx", type=float); _ap.add_argument("--cy", type=float)
+_a=_ap.parse_args()
+FR=_a.frames; OUT=_a.out; TAG=_a.tag_size
+if _a.fx and _a.fy and _a.cx and _a.cy:
+    K=np.array([[_a.fx,0,_a.cx],[0,_a.fy,_a.cy],[0,0,1]]); D=np.zeros(8)
+    print("using intrinsics from the command line (no distortion model)")
+else:
+    from photon_calib import fetch_calibration
+    K,D,_wh,_nick,_n = fetch_calibration(_a.host)
+    print("calibration from %s: %s @ %dx%d, %d snapshots" % (_a.host,_nick,_wh[0],_wh[1],_n))
+    print("  fx %.2f fy %.2f cx %.2f cy %.2f" % (K[0,0],K[1,1],K[0,2],K[1,2]))
+    if _n and _n < 50:
+        print("  WARNING: only %d calibration snapshots - the map will inherit that error" % _n)
 h=TAG/2
 # verified empirically: PV corners pair as TL,TR,BR,BL in an X-right / Y-up / Z-out tag frame
 OBJ=np.array([[-h,h,0],[h,h,0],[h,-h,0],[-h,-h,0]],dtype=np.float64)
@@ -83,8 +104,12 @@ for t in tags:
     print('  tag %-3d %5.3f px (%d frames)'%(t,np.sqrt((e**2).mean()),len(sel)))
 C=np.array([np.linalg.inv(cT[f])[:3,3] for f in fids])
 print('camera viewpoint spread: %s m'%np.round(C.max(axis=0)-C.min(axis=0),3))
-# OpenCV tag frame (X right, Y up, Z out) -> WPILib (X normal, Y right, Z up)
-Rc=np.array([[0,0,1.],[1,0,0],[0,1,0]])
+# Tag frame -> WPILib (X = tag normal, Z = up).
+# Found by brute-forcing all 24 proper rotations against PhotonVision's own
+# multi-tag solve: this one scores 0.34 px, the runner-up 31.6 px. Hand-deriving
+# it gave a matrix wrong by two signs, which produced a layout that loaded fine
+# and reprojected at 1415 px. Do not "simplify" this.
+Rc=np.array([[0,0,-1.],[1,0,0],[0,-1,0]])
 def R2q(R):
     t=np.trace(R)
     if t>0:

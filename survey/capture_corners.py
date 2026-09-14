@@ -9,14 +9,26 @@
 # General Public License at <https://www.gnu.org/licenses/> for details.
 #
 """Capture PhotonVision's OWN detected corners over NetworkTables, across viewpoints."""
-import sys,json,time,ntcore,numpy as np
+import sys,os,json,time,ntcore,numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from photonlibpy.photonCamera import PhotonCamera
 from collections import Counter
-OUT=sys.argv[1]; DUR=float(sys.argv[2]) if len(sys.argv)>2 else 120
+import argparse
+_ap=argparse.ArgumentParser(description="Record PhotonVision's detected corners across viewpoints.")
+_ap.add_argument("out", help="output json")
+_ap.add_argument("seconds", nargs="?", type=float, default=120.0)
+_ap.add_argument("--host", default="photonvision.local")
+_ap.add_argument("--camera", default=None, help="camera nickname (default: auto-detect)")
+_a=_ap.parse_args()
+OUT=_a.out; DUR=_a.seconds
 inst=ntcore.NetworkTableInstance.getDefault()
 inst.startClient4("claude-survey4")
-inst.setServer("192.168.1.202", ntcore.NetworkTableInstance.kDefaultPort4)
-cam=PhotonCamera("OV9281")
+inst.setServer(_a.host, ntcore.NetworkTableInstance.kDefaultPort4)
+if _a.camera is None:
+    from photon_calib import fetch_calibration
+    _a.camera = fetch_calibration(_a.host)[3]
+    print("auto-detected camera: %s" % _a.camera)
+cam=PhotonCamera(_a.camera)
 kept=[];sigs=[];last=0;seen=0
 t0=time.time()
 while time.time()-t0<DUR:

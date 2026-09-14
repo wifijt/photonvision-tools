@@ -8,6 +8,8 @@
 # version.  This program is distributed WITHOUT ANY WARRANTY; see the GNU
 # General Public License at <https://www.gnu.org/licenses/> for details.
 #
+import os
+HOST=os.environ.get('PV_HOST','photonvision.local')
 import asyncio,json,sys,time,msgpack,websockets,numpy as np
 from collections import defaultdict
 DUR=float(sys.argv[1]) if len(sys.argv)>1 else 30
@@ -17,7 +19,7 @@ async def main():
     t0=time.time()
     while time.time()-t0<180:
         try:
-            ws=await websockets.connect('ws://192.168.1.202:5800/websocket_data',open_timeout=5,max_size=80_000_000)
+            ws=await websockets.connect('ws://%s:5800/websocket_data'%HOST,open_timeout=5,max_size=80_000_000)
             break
         except Exception:
             await asyncio.sleep(3)
