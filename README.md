@@ -166,6 +166,22 @@ other one. An actual viewer, by contrast, costs only ~2.5 ms.
 for hours gave 55.9/60.1 fps instead of 60.1/80.5 — same direction, badly
 distorted magnitude.
 
+Every mode acts on **all** cameras unless you name one with `--camera`.
+
+### Two cameras on one Pi 5 do not fit at the defaults
+
+Adding a second OV9281 halved the first camera's framerate and tripled its
+latency. Two settings recovered most of it, with no code:
+
+| | OV9281 | OV9281 (1) | total |
+|---|---|---|---|
+| defaults (threads=4, streams on) | 29.9 fps / 120.5 ms | 43.8 fps / 92.4 ms | 73.7 |
+| threads=1 each, streams off | **47.7 / 78.4** | **46.8 / 77.9** | **94.5** |
+
+`threads` is **per camera**, so the stock 4 means 8 detection threads on 4 cores.
+Even with a single camera, `threads=1` measured faster than `threads=4`
+(14.90 ms vs 15.58 ms). `apply_baseline.py` sets 1.
+
 The dashboard cannot turn this off: its stream selector requires at least one
 stream to stay selected. The websocket API can.
 

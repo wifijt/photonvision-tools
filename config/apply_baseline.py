@@ -31,8 +31,16 @@ BASELINE = {
         2 keeps ~9m for tags you care about at 5-6m. Do not raise it to buy framerate."""),
     "numIterations": (40, """AprilTag pose refinement iterations. The default. Was found
         at 222 on the reference rig, which cost CPU for no measurable accuracy gain."""),
-    "threads": (4, """Detector worker threads. Match physical cores (Pi 5 = 4).
-        8 oversubscribes and adds latency jitter without adding throughput."""),
+    "threads": (1, """Detector worker threads, PER CAMERA. Matching physical cores sounds
+        right and is wrong: the detector's own threading competes with capture, streaming
+        and the JVM, and on a saturated Pi 5 more threads cost more than they return.
+        Measured, one camera: threads=4 detected in 15.58 ms, threads=1 in 14.90 ms.
+        With two cameras it is decisive, because each camera gets its own pool - 4 each
+        is 8 threads on 4 cores:
+            threads=4 each   29.9 + 43.8 = 73.7 fps total
+            threads=2 each   32.9 + 47.1 = 80.0
+            threads=1 each   31.3 + 52.6 = 84.0   and ~20 ms less latency on both
+        Raise it only if you measure a gain on your own hardware."""),
     "decisionMargin": (35, """Detection confidence floor. 50 was rejecting valid tags -
         lowering it to 35 recovered a tag that had never been detected at all.
         Lower admits false positives; multi-tag rejects those anyway."""),

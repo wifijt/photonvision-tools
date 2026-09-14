@@ -23,6 +23,12 @@ sensor's own period: with streams off the pipeline keeps up with every camera
 frame, with them on it drops every other one.  An actual viewer costs ~2.5 ms -
 it is the unconditional preparation that is expensive, not the viewing.
 
+With TWO cameras on one Pi the proportional gain is smaller, because the box is
+already saturated, but it still helps - and it stacks with threads=1:
+
+    2 cameras, threads=4, streams on    29.9 + 43.8 = 73.7 fps
+    2 cameras, threads=1, streams off   47.7 + 46.8 = 94.5 fps
+
 Measure this on a freshly restarted service; a long-running process drifts and
 distorts the comparison.
 
@@ -35,19 +41,22 @@ is what this does.  It applies live, with no service restart.
     set_streams.py --on                   # pit: processed stream back
     set_streams.py --daemon               # let the robot decide, over NT
 
+Every mode acts on ALL cameras unless you name one with --camera.
+
 In daemon mode it watches a NetworkTables boolean and applies it, so the robot
 can shed the streams itself when the match starts:
 
-    /PhotonStreams/enable     robot writes: true = streams on, false = off
-    /PhotonStreams/state      we publish: what is actually set right now
-    /PhotonStreams/latencyMs  we publish: measured capture->publish latency
-    /PhotonStreams/fps        we publish: measured pipeline rate
+    /PhotonStreams/enable          robot writes: true = streams on, false = off
+    /PhotonStreams/state           we publish: what is actually set right now
+    /PhotonStreams/<camera>/fps        we publish: measured rate, per camera
+    /PhotonStreams/<camera>/latencyMs  we publish: measured capture->publish
 
 Setting enable=false in autonomousInit and true in disabledInit is the whole
 integration.
 """
 import argparse
 import asyncio
+import re
 import sys
 import time
 
@@ -58,8 +67,8 @@ except ImportError:
     sys.exit("needs: pip install msgpack websockets")
 
 
-async def _read_state(host):
-    """Return (uniqueName, nickname, settings dict) for the first camera."""
+async def _read_all(host):
+    """Return [(uniqueName, nickname, settings), ...] for EVERY camera."""
     uri = "ws://%s:5800/websocket_data" % host
     async with websockets.connect(uri, max_size=None, open_timeout=10) as ws:
         for _ in range(60):
@@ -69,16 +78,20 @@ async def _read_state(host):
             cams = msg.get("cameraSettings") or msg.get("cameraSettingsList")
             if not cams:
                 continue
-            c = cams[0]
-            return c.get("uniqueName"), c.get("nickname"), c.get("currentPipelineSettings", {})
+            return [(c.get("uniqueName"), c.get("nickname"),
+                     c.get("currentPipelineSettings", {})) for c in cams]
     raise RuntimeError("no camera state from %s - is PhotonVision running?" % host)
 
 
-async def _apply(host, unique_name, **kw):
+async def _apply_many(host, targets, **kw):
+    """One websocket, one changePipelineSetting per camera."""
     uri = "ws://%s:5800/websocket_data" % host
     async with websockets.connect(uri, max_size=None, open_timeout=10) as ws:
-        kw["cameraUniqueName"] = unique_name
-        await ws.send(msgpack.packb({"changePipelineSetting": kw}))
+        for uid, _nick in targets:
+            payload = dict(kw)
+            payload["cameraUniqueName"] = uid
+            await ws.send(msgpack.packb({"changePipelineSetting": payload}))
+            await asyncio.sleep(1.0)
         await asyncio.sleep(1.5)
 
 
@@ -96,31 +109,49 @@ def describe(s):
     return "ON: " + " + ".join(parts)
 
 
-def set_streams(host, raw, proc, draw=None, quiet=False):
-    """Apply a stream configuration and verify it actually took."""
-    uid, nick, before = asyncio.run(_read_state(host))
+def _select(cams, only):
+    if only is None:
+        return cams
+    hit = [c for c in cams if c[1] == only]
+    if not hit:
+        raise SystemExit("no camera named %r - have: %s"
+                         % (only, ", ".join(repr(c[1]) for c in cams)))
+    return hit
+
+
+def set_streams(host, raw, proc, draw=None, quiet=False, only=None):
+    """Apply to every camera (or just `only`), then verify it actually took."""
+    cams = _select(asyncio.run(_read_all(host)), only)
     if draw is None:
         draw = proc
     want = {"inputShouldShow": bool(raw), "outputShouldShow": bool(proc),
             "outputShouldDraw": bool(draw)}
-    if all(before.get(k) == v for k, v in want.items()):
+    todo = [(uid, nick) for uid, nick, s in cams
+            if any(s.get(k) != v for k, v in want.items())]
+    if not todo:
         if not quiet:
-            print("%s: already %s" % (nick, describe(before)))
-        return before
-    asyncio.run(_apply(host, uid, **want))
-    _, _, after = asyncio.run(_read_state(host))
-    bad = [k for k, v in want.items() if after.get(k) != v]
-    if not quiet:
-        print("%s: %s  ->  %s" % (nick, describe(before), describe(after)))
-        for k in bad:
-            print("  !! %s did not take (wanted %s, got %s)" % (k, want[k], after.get(k)))
-    if bad:
-        raise RuntimeError("settings did not apply: %s" % ", ".join(bad))
-    return after
+            for _uid, nick, s in cams:
+                print("%s: already %s" % (nick, describe(s)))
+        return
+    before = {nick: s for _uid, nick, s in cams}
+    asyncio.run(_apply_many(host, todo, **want))
+    after = {nick: s for _uid, nick, s in _select(asyncio.run(_read_all(host)), only)}
+    failed = []
+    for _uid, nick in todo:
+        bad = [k for k, v in want.items() if after.get(nick, {}).get(k) != v]
+        if not quiet:
+            print("%s: %s  ->  %s" % (nick, describe(before[nick]),
+                                      describe(after.get(nick, {}))))
+            for k in bad:
+                print("  !! %s did not take (wanted %s, got %s)"
+                      % (k, want[k], after.get(nick, {}).get(k)))
+        failed += ["%s.%s" % (nick, k) for k in bad]
+    if failed:
+        raise RuntimeError("settings did not apply: %s" % ", ".join(failed))
 
 
-def measure(host, camera, seconds=6.0):
-    """Measure pipeline latency and rate over NetworkTables. Returns (fps, latency_ms)."""
+def measure(host, cameras, seconds=6.0):
+    """Measure rate and latency for each camera. Returns {nickname: (fps, ms)}."""
     import ntcore
     from photonlibpy.photonCamera import PhotonCamera
     inst = ntcore.NetworkTableInstance.getDefault()
@@ -128,24 +159,34 @@ def measure(host, camera, seconds=6.0):
         inst.startClient4("set-streams-measure")
         inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
         time.sleep(1.5)
-    cam = PhotonCamera(camera)
-    seen, lat = set(), []
+    cams = {n: PhotonCamera(n) for n in cameras}
+    seen = {n: set() for n in cams}
+    lat = {n: [] for n in cams}
     t0 = time.time()
     while time.time() - t0 < seconds:
-        r = cam.getLatestResult()
-        md = getattr(r, "metadata", None)
-        if md and md.sequenceID not in seen:
-            seen.add(md.sequenceID)
-            lat.append((md.publishTimestampMicros - md.captureTimestampMicros) / 1000.0)
+        for n, c in cams.items():
+            r = c.getLatestResult()
+            md = getattr(r, "metadata", None)
+            if md and md.sequenceID is not None and md.sequenceID not in seen[n]:
+                seen[n].add(md.sequenceID)
+                lat[n].append((md.publishTimestampMicros - md.captureTimestampMicros) / 1000.0)
         time.sleep(0.002)
-    if not lat:
-        return float("nan"), float("nan")
-    lat.sort()
-    return len(seen) / seconds, lat[len(lat) // 2]
+    out = {}
+    for n in cams:
+        if lat[n]:
+            lat[n].sort()
+            out[n] = (len(seen[n]) / seconds, lat[n][len(lat[n]) // 2])
+        else:
+            out[n] = (float("nan"), float("nan"))
+    return out
 
 
-def daemon(host, table, nt_server, camera):
-    """Watch an NT boolean and apply it; publish what we actually did."""
+def _safe(name):
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "camera"
+
+
+def daemon(host, table, nt_server, only):
+    """Watch an NT boolean and apply it to every camera; publish what we did."""
     import ntcore
     inst = ntcore.NetworkTableInstance.getDefault()
     inst.startClient4("photon-streams")
@@ -153,35 +194,36 @@ def daemon(host, table, nt_server, camera):
     t = inst.getTable(table)
     enable = t.getBooleanTopic("enable").getEntry(True)
     state = t.getBooleanTopic("state").publish()
-    lat_pub = t.getDoubleTopic("latencyMs").publish()
-    fps_pub = t.getDoubleTopic("fps").publish()
     enable.setDefault(True)
 
-    uid, nick, cur = asyncio.run(_read_state(host))
-    camera = camera or nick
-    applied = bool(cur.get("outputShouldShow") or cur.get("inputShouldShow"))
+    cams = _select(asyncio.run(_read_all(host)), only)
+    names = [nick for _uid, nick, _s in cams]
+    pubs = {n: (t.getDoubleTopic("%s/fps" % _safe(n)).publish(),
+                t.getDoubleTopic("%s/latencyMs" % _safe(n)).publish()) for n in names}
+    applied = any(s.get("outputShouldShow") or s.get("inputShouldShow")
+                  for _uid, _n, s in cams)
     state.set(applied)
     print("daemon: %s, watching /%s/enable (currently %s)"
-          % (nick, table, "on" if applied else "off"), flush=True)
+          % (", ".join(names), table, "on" if applied else "off"), flush=True)
 
-    last_measure = 0.0
+    last = 0.0
     while True:
         want = bool(enable.get(True))
         if want != applied:
             try:
-                set_streams(host, raw=False, proc=want, draw=want, quiet=True)
+                set_streams(host, raw=False, proc=want, draw=want, quiet=True, only=only)
                 applied = want
                 state.set(applied)
                 print("%s  streams -> %s" % (time.strftime("%H:%M:%S"),
                                              "ON" if want else "OFF"), flush=True)
             except Exception as e:                       # keep the daemon alive
                 print("  !! failed to apply: %s" % e, flush=True)
-        if time.time() - last_measure > 10:
-            last_measure = time.time()
+        if time.time() - last > 10:
+            last = time.time()
             try:
-                f, l = measure(host, camera, 3.0)
-                fps_pub.set(float(f))
-                lat_pub.set(float(l))
+                for n, (f, l) in measure(host, names, 3.0).items():
+                    pubs[n][0].set(float(f))
+                    pubs[n][1].set(float(l))
             except Exception:
                 pass
         time.sleep(0.25)
@@ -200,7 +242,8 @@ def main():
     ap.add_argument("--host", default="photonvision.local")
     ap.add_argument("--table", default="PhotonStreams", help="NT table for --daemon")
     ap.add_argument("--nt-server", default=None, help="NT server (default: --host)")
-    ap.add_argument("--camera", default=None, help="camera nickname (default: auto)")
+    ap.add_argument("--camera", default=None,
+                    help="act on this camera only (default: all of them)")
     ap.add_argument("--measure", action="store_true",
                     help="also measure latency/fps after applying")
     a = ap.parse_args()
@@ -208,24 +251,20 @@ def main():
     if a.daemon:
         return daemon(a.host, a.table, a.nt_server, a.camera)
 
-    if a.status:
-        uid, nick, s = asyncio.run(_read_state(a.host))
-        print("%s: %s" % (nick, describe(s)))
-        for k in ("inputShouldShow", "outputShouldShow", "outputShouldDraw",
-                  "streamingFrameDivisor"):
-            print("  %-22s %s" % (k, s.get(k)))
-        if a.measure:
-            f, l = measure(a.host, a.camera or nick)
-            print("  %-22s %.1f fps, %.1f ms latency" % ("measured", f, l))
-        return
+    cams = _select(asyncio.run(_read_all(a.host)), a.camera)
 
-    raw = a.raw or a.both
-    proc = a.on or a.both
-    set_streams(a.host, raw=raw, proc=proc)
+    if a.status:
+        for _uid, nick, s in cams:
+            print("%s: %s" % (nick, describe(s)))
+            for k in ("inputShouldShow", "outputShouldShow", "outputShouldDraw",
+                      "streamingFrameDivisor", "threads"):
+                print("  %-22s %s" % (k, s.get(k)))
+    else:
+        set_streams(a.host, raw=a.raw or a.both, proc=a.on or a.both, only=a.camera)
+
     if a.measure:
-        _, nick, _ = asyncio.run(_read_state(a.host))
-        f, l = measure(a.host, a.camera or nick)
-        print("  measured: %.1f fps, %.1f ms latency" % (f, l))
+        for n, (f, l) in measure(a.host, [c[1] for c in cams]).items():
+            print("  %-16s %.1f fps, %.1f ms latency" % (n, f, l))
 
 
 if __name__ == "__main__":
