@@ -101,6 +101,10 @@ python3 survey/measure_quality.py 30
 
 ## Plain-English settings guide
 
+**[GATING.md](GATING.md)** covers using vision as a *correction* to odometry rather than a
+primary sensor, and the filtering that makes that safe — why a bad correction is worse
+than no correction, and the gates that catch each failure mode.
+
 **[SETTINGS.md](SETTINGS.md)** explains what every AprilTag setting actually does, what it
 costs, and which ones depend on where you are. Read that before tuning anything.
 
