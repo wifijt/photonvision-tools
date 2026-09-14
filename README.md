@@ -145,6 +145,68 @@ ws.send(msgpack.packb({"changePipelineSetting":
 Note the `cameraSettings` broadcast lags by a second or two, so reading a value straight
 back can show the old one even though the change applied.
 
+### set_streams.py — a third of your framerate goes to a stream nobody watches
+
+PhotonVision copies, converts, draws on and encodes its camera streams on **every
+frame, even with no client connected**. Closing the dashboard does not help — the
+stream is *prepared* regardless. On a Pi 5 / OV9281 at 1280x800, measured over 3
+interleaved 45-second A/B cycles with nothing attached to any stream port:
+
+| streams | fps | latency | frame period |
+|---|---|---|---|
+| on (default) | 60.1 | 42.0 ms | 17.42 ms |
+| off | 80.5 | 32.7 ms | **8.71 ms** |
+| | **+20.4 (+34%)** | **−9.2 ms** | |
+
+The frame period tells the story: 8.71 ms is the sensor's own period. With streams
+off the pipeline keeps up with every camera frame; with them on it drops every
+other one. An actual viewer, by contrast, costs only ~2.5 ms.
+
+**Measure this on a freshly restarted service.** A process that had been running
+for hours gave 55.9/60.1 fps instead of 60.1/80.5 — same direction, badly
+distorted magnitude.
+
+Every mode acts on **all** cameras unless you name one with `--camera`.
+
+### Two cameras on one Pi 5 do not fit at the defaults
+
+Adding a second OV9281 halved the first camera's framerate and tripled its
+latency. Two settings recovered most of it, with no code:
+
+| | OV9281 | OV9281 (1) | total |
+|---|---|---|---|
+| defaults (threads=4, streams on) | 29.9 fps / 120.5 ms | 43.8 fps / 92.4 ms | 73.7 |
+| threads=1 each, streams off | **47.7 / 78.4** | **46.8 / 77.9** | **94.5** |
+
+`threads` is **per camera**, so the stock 4 means 8 detection threads on 4 cores.
+Even with a single camera, `threads=1` measured faster than `threads=4`
+(14.90 ms vs 15.58 ms). `apply_baseline.py` sets 1.
+
+The dashboard cannot turn this off: its stream selector requires at least one
+stream to stay selected. The websocket API can.
+
+```sh
+python3 config/set_streams.py --status --measure   # what is set, what it costs
+python3 config/set_streams.py --off                # match
+python3 config/set_streams.py --on                 # pit
+python3 config/set_streams.py --daemon             # let the robot decide
+```
+
+Applies live, no service restart. It reads the setting back and fails loudly if it
+did not take.
+
+Daemon mode follows NetworkTables so the robot can shed the streams itself:
+
+| topic | direction | meaning |
+|---|---|---|
+| `/PhotonStreams/enable` | robot writes | `true` = on, `false` = off |
+| `/PhotonStreams/state` | published | what is actually applied |
+| `/PhotonStreams/latencyMs` | published | measured capture→publish |
+| `/PhotonStreams/fps` | published | measured pipeline rate |
+
+Set `enable=false` in `autonomousInit` and `true` in `disabledInit`; that is the
+whole integration. Streams drop for the match and come back in the pit.
+
 ---
 
 ## A bug worth knowing about
