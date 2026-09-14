@@ -10,15 +10,21 @@
 #
 """Turn PhotonVision's camera streams off for a match, back on for the pit.
 
-PhotonVision encodes and serves its MJPEG streams whether or not anyone is
-connected.  On a competition robot - laptop unplugged, nobody looking - that is
-pure waste.  Measured on a Pi 5 with an OV9281 at 1280x800:
+PhotonVision copies, converts, draws on and encodes its camera streams every
+frame even when nothing is connected.  On a competition robot - laptop unplugged,
+nobody looking - that is pure waste.  Measured on a Pi 5 with an OV9281 at
+1280x800, freshly restarted, nothing attached to any stream port:
 
-    streams on   60.7 ms latency   53.7 fps
-    streams off  41.6 ms latency   59.6 fps
+    streams on   60.1 fps   42.0 ms latency   frame period 17.42 ms
+    streams off  80.5 fps   32.7 ms latency   frame period  8.71 ms
 
-19 ms of latency and 6 fps, for a picture no one is watching.  Closing the
-browser does not help; the cost is paid regardless of viewers.
+A third of the framerate, for a picture no one is watching.  8.71 ms is the
+sensor's own period: with streams off the pipeline keeps up with every camera
+frame, with them on it drops every other one.  An actual viewer costs ~2.5 ms -
+it is the unconditional preparation that is expensive, not the viewing.
+
+Measure this on a freshly restarted service; a long-running process drifts and
+distorts the comparison.
 
 The dashboard cannot do this - its stream selector requires at least one stream
 to stay selected - so the only way to turn both off is the websocket API, which

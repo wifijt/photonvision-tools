@@ -145,20 +145,26 @@ ws.send(msgpack.packb({"changePipelineSetting":
 Note the `cameraSettings` broadcast lags by a second or two, so reading a value straight
 back can show the old one even though the change applied.
 
-### set_streams.py — 19 ms of latency you are paying for nothing
+### set_streams.py — a third of your framerate goes to a stream nobody watches
 
-PhotonVision copies, draws and JPEG-encodes its camera streams on **every frame,
-whether or not anyone is connected**. Closing the dashboard does not help. On a
-Pi 5 / OV9281 at 1280x800, measured over 4 interleaved 60-second A/B cycles:
+PhotonVision copies, converts, draws on and encodes its camera streams on **every
+frame, even with no client connected**. Closing the dashboard does not help — the
+stream is *prepared* regardless. On a Pi 5 / OV9281 at 1280x800, measured over 3
+interleaved 45-second A/B cycles with nothing attached to any stream port:
 
-| streams | latency | fps |
-|---|---|---|
-| on (default) | 59.7 ms | 55.9 |
-| off | 41.0 ms | 60.1 |
-| | **−18.7 ms** | **+4.3** |
+| streams | fps | latency | frame period |
+|---|---|---|---|
+| on (default) | 60.1 | 42.0 ms | 17.42 ms |
+| off | 80.5 | 32.7 ms | **8.71 ms** |
+| | **+20.4 (+34%)** | **−9.2 ms** | |
 
-For scale, the whole AprilTag detection stage costs 11.6 ms on the same rig — so
-the stream you are not watching costs more than the work you actually want.
+The frame period tells the story: 8.71 ms is the sensor's own period. With streams
+off the pipeline keeps up with every camera frame; with them on it drops every
+other one. An actual viewer, by contrast, costs only ~2.5 ms.
+
+**Measure this on a freshly restarted service.** A process that had been running
+for hours gave 55.9/60.1 fps instead of 60.1/80.5 — same direction, badly
+distorted magnitude.
 
 The dashboard cannot turn this off: its stream selector requires at least one
 stream to stay selected. The websocket API can.
