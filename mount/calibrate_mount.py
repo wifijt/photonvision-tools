@@ -235,8 +235,22 @@ def solve(path, origin_height=None):
                   % (dyaw.mean(), dyaw.std()))
             print("     separation    %7.1f mm   sd %.1f" % (sep.mean(), sep.std()))
 
+    # A circle fit is only meaningful if the residual is small COMPARED TO THE
+    # RADIUS. Pivoting about a point close to the cameras gives a tiny arm that
+    # pose noise swamps - measured: a 28 mm radius with a 13 mm residual, which
+    # is not a measurement at all. Refuse rather than print a plausible number.
+    bad = [n for i, n in enumerate(names) if res_all[n].std() > 0.15 * r[i]]
     worst = max(res_all.values(), key=lambda v: v.std())
     print("\nFIT QUALITY: worst per-camera radial residual %.1f mm sd" % (1000 * worst.std()))
+    for i, n in enumerate(names):
+        print("   %-14s residual is %3.0f%% of the radius" % (n, 100 * res_all[n].std() / max(r[i], 1e-9)))
+    if bad:
+        print("\n*** THESE RADII ARE NOT USABLE: %s" % ", ".join(bad))
+        print("    The residual is more than 15% of the radius, which means the")
+        print("    pivot was too close to the cameras - the arm is smaller than the")
+        print("    pose noise. Move the pivot 200-400 mm AWAY from the lenses and")
+        print("    rotate again. (The yaw between cameras above is unaffected; it")
+        print("    does not come from the circle fit.)")
     print("A residual much larger than your pose jitter means either the rig did not")
     print("rotate about a FIXED axis, or one camera's calibration disagrees with the others.")
 

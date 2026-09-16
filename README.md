@@ -207,6 +207,27 @@ Daemon mode follows NetworkTables so the robot can shed the streams itself:
 Set `enable=false` in `autonomousInit` and `true` in `disabledInit`; that is the
 whole integration. Streams drop for the match and come back in the pit.
 
+Install it on the coprocessor so it works without a laptop:
+
+```
+/opt/photonstreams/set_streams.py
+/etc/systemd/system/photonstreams.service   --daemon --table PhotonStreams
+```
+
+**Metrics are off by default, and should stay off.** Publishing per-camera
+fps/latencyMs means polling PhotonVision's websocket from the coprocessor, which
+competes with photontune's own reads. It starved individual samples of a tuning
+sweep badly enough that the tuner chose an exposure 4x too long. The toggle
+itself is unaffected; only `--publish-metrics` is risky, and only while
+something else is reading.
+
+Do **not** install `photonlibpy` on the coprocessor to get metrics either —
+importing `PhotonCamera` starts a time-sync server that binds a UDP port
+PhotonVision already owns (`OSError: [Errno 98] Address already in use`). It is
+meant for the roboRIO. Read `fps` and `latency` out of PhotonVision's own
+websocket payload instead; they are already there, and counting websocket
+messages measures the throttled UI broadcast rate (9 fps on a pipeline doing 41).
+
 ---
 
 ## mount/ — measure where the cameras are, by spinning
