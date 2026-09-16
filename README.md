@@ -145,6 +145,18 @@ ws.send(msgpack.packb({"changePipelineSetting":
 Note the `cameraSettings` broadcast lags by a second or two, so reading a value straight
 back can show the old one even though the change applied.
 
+Two things about this message that are easy to get wrong. PhotonVision does **not**
+validate the keys: a misspelled or unknown setting name is accepted silently, with no
+error and no effect — so a typo looks exactly like a setting that did not stick. And a
+bad key does not invalidate the rest of the message. Verify by reading the value back,
+never by assuming the send succeeded. (An earlier version of these notes claimed a
+wrongly-typed field voided the whole payload. That was wrong; testing showed even a
+bogus key is accepted.)
+
+Enums are asymmetric: you **send** the name and **read back** an int. Sending
+`"DEG_0"` and comparing the readback to `"DEG_0"` never matches, because PhotonVision
+reports `0`. Compare against both.
+
 ### set_streams.py — a third of your framerate goes to a stream nobody watches
 
 PhotonVision copies, converts, draws on and encodes its camera streams on **every
@@ -322,3 +334,70 @@ pip install msgpack websockets numpy scipy opencv-python-headless pyntcore photo
 ## License
 
 GPLv3. See [LICENSE](LICENSE).
+
+## viz/ — where is the rig, right now
+
+`field_viewer.py` serves a live top-down field plan on your own machine. It reads
+PhotonVision over NetworkTables, works out where each camera is, and draws it.
+
+    python3 viz/field_viewer.py --host photonvision.local
+    open http://localhost:8077
+
+It needs no configuration and no layout file. The tag layout is **reconstructed from
+the live stream** — every multi-tag frame gives a camera pose plus a set of
+camera-to-tag transforms, and composing them puts each tag in the field frame. The
+picture therefore always shows the layout PhotonVision is actually running, not a copy
+that has drifted. Tags are cached between runs; the cache **merges**, because a camera
+that cannot currently see a tag is not evidence the tag is gone.
+
+### The fused rig pose
+
+Two cameras bolted to one plate do not get to disagree about where they are. The
+viewer learns the fixed camera-to-camera transform while both have a good multi-tag
+fix and the rig is stationary, then pins both cameras to their seats on the rig and
+solves **one** pose.
+
+That is better than averaging two independent poses. A camera looking at tags in poor
+geometry has a pose that slides along its viewing axis; pinned to the rig, the other
+camera — looking from a completely different angle — constrains exactly the direction
+the first one is weak in. Measured on a 82 deg splayed pair sharing **no tags at all**,
+the two cameras agreed on the rig origin to 0.89 mm and 0.03 deg.
+
+Weighting is inverse-variance, with
+
+    sigma = 0.008 * d^2 / n_tags * (1 + max(0, reproj - 0.6))
+
+`d^2/n` is the usual WPILib shape; reprojection error is folded in because it is the
+one number reporting how well the tags agreed with each other on *this* frame.
+
+Three things learned the hard way, all preserved in the code:
+
+  - A seat is the rig origin expressed in the camera's frame, so the rig's field pose
+    is `M_camera @ seat`, **not** `M_camera @ inv(seat)`. Getting it backwards rotates
+    each camera's answer the opposite way and shows up as the cameras disagreeing by
+    twice the mount angle — 161 deg on an 82 deg mount.
+  - Learn the mount only while the rig is **still**. The cameras publish
+    independently, so timing skew turns rig motion straight into apparent mount error:
+    at 0.5 m/s, 20 ms of skew is 10 mm of fiction.
+  - Down-weight a single-tag fix; do not drop it. Dropping makes the answer switch
+    between one-camera and two-camera solutions, and that switch is itself a step —
+    measured, hard dropping turned 0.4% of samples into 44%, with excursions to 2.7 m.
+
+### Reading the logs
+
+`--log FILE` writes one JSON object per fused pose. `analyze_rig_log.py` finds the
+jitter in it and says what caused it:
+
+    python3 viz/analyze_rig_log.py rig.jsonl
+
+It scores each sample by how far it sits from where its neighbours say it should be,
+`|p[i] - (p[i-1]+p[i+1])/2|`, which is zero for any constant-velocity motion. A plain
+step between consecutive samples cannot tell jitter from movement — carrying the rig at
+1.6 m/s produces 165 mm steps at 10 Hz and every one of them is real.
+
+**The number to watch is the camera-to-camera disagreement.** Both cameras compute the
+same rig pose independently, so their difference is a direct read on whether the mount
+transform and the tag layout are right; it should sit at a millimetre or two. If
+re-learning the mount makes a large disagreement vanish, that is not a fix — a mount
+that changes with rig position is absorbing error in the tag layout, and the estimator
+will look excellent at any one spot while being wrong everywhere else.
