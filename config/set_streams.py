@@ -48,8 +48,13 @@ can shed the streams itself when the match starts:
 
     /PhotonStreams/enable          robot writes: true = streams on, false = off
     /PhotonStreams/state           we publish: what is actually set right now
-    /PhotonStreams/<camera>/fps        we publish: measured rate, per camera
-    /PhotonStreams/<camera>/latencyMs  we publish: measured capture->publish
+    /PhotonStreams/<camera>/fps        only with --publish-metrics (see below)
+    /PhotonStreams/<camera>/latencyMs  only with --publish-metrics
+
+Metrics are OFF by default. Polling PhotonVision's websocket from the
+coprocessor competes with photontune's own reads: it starved individual samples
+in a sweep, producing an impossible non-monotonic response (tags 0.25, 0, 0.03,
+0, 0, 1.08, 3.00) and an exposure 4x too long. The toggle itself is unaffected.
 
 Setting enable=false in autonomousInit and true in disabledInit is the whole
 integration.
@@ -150,42 +155,56 @@ def set_streams(host, raw, proc, draw=None, quiet=False, only=None):
         raise RuntimeError("settings did not apply: %s" % ", ".join(failed))
 
 
-def measure(host, cameras, seconds=6.0):
-    """Measure rate and latency for each camera. Returns {nickname: (fps, ms)}."""
-    import ntcore
-    from photonlibpy.photonCamera import PhotonCamera
-    inst = ntcore.NetworkTableInstance.getDefault()
-    if not inst.isConnected():
-        inst.startClient4("set-streams-measure")
-        inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
-        time.sleep(1.5)
-    cams = {n: PhotonCamera(n) for n in cameras}
-    seen = {n: set() for n in cams}
-    lat = {n: [] for n in cams}
-    t0 = time.time()
-    while time.time() - t0 < seconds:
-        for n, c in cams.items():
-            r = c.getLatestResult()
-            md = getattr(r, "metadata", None)
-            if md and md.sequenceID is not None and md.sequenceID not in seen[n]:
-                seen[n].add(md.sequenceID)
-                lat[n].append((md.publishTimestampMicros - md.captureTimestampMicros) / 1000.0)
-        time.sleep(0.002)
+async def _measure(host, seconds):
+    """Rate and latency per camera, read from PhotonVision's own websocket.
+
+    Deliberately NOT photonlibpy: importing PhotonCamera starts a time-sync
+    server that binds a UDP port PhotonVision already owns, so on the
+    coprocessor itself it dies with "Address already in use". The websocket is
+    the same data without the collision, and needs no extra dependency.
+    """
+    uri = "ws://%s:5800/websocket_data" % host
+    fps, lat = {}, {}
+    async with websockets.connect(uri, max_size=None, open_timeout=10) as ws:
+        end = time.time() + seconds
+        while time.time() < end:
+            try:
+                raw = await asyncio.wait_for(ws.recv(), max(0.2, end - time.time()))
+            except asyncio.TimeoutError:
+                break
+            try:
+                msg = msgpack.unpackb(raw, raw=False)
+            except Exception:
+                continue
+            res = (msg or {}).get("updatePipelineResult") if isinstance(msg, dict) else None
+            if not res:
+                continue
+            for uid, c in res.items():
+                # Take PhotonVision's OWN fps and latency out of the payload.
+                # Counting websocket messages measures the UI broadcast rate,
+                # which is throttled - it read 9 fps on a pipeline doing 41.
+                if c.get("fps"):
+                    fps.setdefault(uid, []).append(float(c["fps"]))
+                if c.get("latency"):
+                    lat.setdefault(uid, []).append(float(c["latency"]))
     out = {}
-    for n in cams:
-        if lat[n]:
-            lat[n].sort()
-            out[n] = (len(seen[n]) / seconds, lat[n][len(lat[n]) // 2])
-        else:
-            out[n] = (float("nan"), float("nan"))
+    for uid in set(fps) | set(lat):
+        f = sorted(fps.get(uid, [])) or [float("nan")]
+        l = sorted(lat.get(uid, [])) or [float("nan")]
+        out[uid] = (f[len(f) // 2], l[len(l) // 2])
     return out
+
+
+def measure(host, cameras, seconds=6.0):
+    """{uniqueName: (fps, latency_ms)} for every camera PhotonVision is running."""
+    return asyncio.run(_measure(host, seconds))
 
 
 def _safe(name):
     return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "camera"
 
 
-def daemon(host, table, nt_server, only):
+def daemon(host, table, nt_server, only, publish_metrics=False):
     """Watch an NT boolean and apply it to every camera; publish what we did."""
     import ntcore
     inst = ntcore.NetworkTableInstance.getDefault()
@@ -198,15 +217,18 @@ def daemon(host, table, nt_server, only):
 
     cams = _select(asyncio.run(_read_all(host)), only)
     names = [nick for _uid, nick, _s in cams]
+    uid_to_nick = {uid: nick for uid, nick, _s in cams}
     pubs = {n: (t.getDoubleTopic("%s/fps" % _safe(n)).publish(),
                 t.getDoubleTopic("%s/latencyMs" % _safe(n)).publish()) for n in names}
     applied = any(s.get("outputShouldShow") or s.get("inputShouldShow")
                   for _uid, _n, s in cams)
     state.set(applied)
-    print("daemon: %s, watching /%s/enable (currently %s)"
-          % (", ".join(names), table, "on" if applied else "off"), flush=True)
+    print("daemon: %s, watching /%s/enable (currently %s)%s"
+          % (", ".join(names), table, "on" if applied else "off",
+             "" if publish_metrics else "  [metrics off]"), flush=True)
 
     last = 0.0
+    measure_failed = [False]
     while True:
         want = bool(enable.get(True))
         if want != applied:
@@ -218,14 +240,24 @@ def daemon(host, table, nt_server, only):
                                              "ON" if want else "OFF"), flush=True)
             except Exception as e:                       # keep the daemon alive
                 print("  !! failed to apply: %s" % e, flush=True)
-        if time.time() - last > 10:
+        if publish_metrics and time.time() - last > 10:
             last = time.time()
             try:
-                for n, (f, l) in measure(host, names, 3.0).items():
-                    pubs[n][0].set(float(f))
-                    pubs[n][1].set(float(l))
-            except Exception:
-                pass
+                for uid, (f, l) in measure(host, names, 3.0).items():
+                    n = uid_to_nick.get(uid)
+                    if n in pubs:
+                        pubs[n][0].set(float(f))
+                        pubs[n][1].set(float(l))
+            except Exception as e:
+                # Swallowing this silently hid a missing photonlibpy for a whole
+                # session: the daemon looked healthy and simply never published
+                # fps or latency. Say it once, then stop repeating.
+                if not measure_failed[0]:
+                    measure_failed[0] = True
+                    print("  !! cannot measure fps/latency: %s" % e, flush=True)
+                    print("     the toggle still works; only the published"
+                          " fps/latencyMs topics are affected.", flush=True)
+
         time.sleep(0.25)
 
 
@@ -246,10 +278,17 @@ def main():
                     help="act on this camera only (default: all of them)")
     ap.add_argument("--measure", action="store_true",
                     help="also measure latency/fps after applying")
+    ap.add_argument("--publish-metrics", action="store_true",
+                    help="daemon: also publish per-camera fps/latencyMs. OFF by "
+                         "default: polling PhotonVision's websocket on the "
+                         "coprocessor competes with photontune's own reads and "
+                         "corrupted a sweep badly enough to pick an exposure 4x "
+                         "too long. Only enable if nothing else is reading the "
+                         "websocket at the same time.")
     a = ap.parse_args()
 
     if a.daemon:
-        return daemon(a.host, a.table, a.nt_server, a.camera)
+        return daemon(a.host, a.table, a.nt_server, a.camera, a.publish_metrics)
 
     cams = _select(asyncio.run(_read_all(a.host)), a.camera)
 
@@ -263,8 +302,9 @@ def main():
         set_streams(a.host, raw=a.raw or a.both, proc=a.on or a.both, only=a.camera)
 
     if a.measure:
-        for n, (f, l) in measure(a.host, [c[1] for c in cams]).items():
-            print("  %-16s %.1f fps, %.1f ms latency" % (n, f, l))
+        u2n = {uid: nick for uid, nick, _s in cams}
+        for uid, (f, l) in measure(a.host, [c[1] for c in cams]).items():
+            print("  %-16s %.1f fps, %.1f ms latency" % (u2n.get(uid, uid), f, l))
 
 
 if __name__ == "__main__":
