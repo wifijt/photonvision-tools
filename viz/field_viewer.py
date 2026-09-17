@@ -767,7 +767,7 @@ function bounds(){
   const p=[]; for(const k in D.tags){p.push([D.tags[k].x,D.tags[k].y]);}
   for(const k in D.cams){const c=D.cams[k]; if(c.x!==undefined)p.push([c.x,c.y]);}
   const f=D.field||{};
-  if(f.x0!==undefined){p.push([f.x0,f.y0]);p.push([f.x1,f.y1]);}
+  if(f.poly){f.poly.forEach(q=>p.push(q));}
   if(!p.length)return{x0:-1,y0:-1,x1:1,y1:1};
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   for(const[a,b]of p){x0=Math.min(x0,a);x1=Math.max(x1,a);y0=Math.min(y0,b);y1=Math.max(y1,b);}
@@ -814,18 +814,28 @@ function draw(){
     for(let x=Math.ceil(b.x0/FT)*FT;x<b.x1;x+=FT){X.beginPath();X.moveTo(PX(x),PY(b.y0));X.lineTo(PX(x),PY(b.y1));X.stroke();}
     for(let y=Math.ceil(b.y0/FT)*FT;y<b.y1;y+=FT){X.beginPath();X.moveTo(PX(b.x0),PY(y));X.lineTo(PX(b.x1),PY(y));X.stroke();}
   }
-  if($('#tField').checked && f.x0!==undefined){
+  if($('#tField').checked && f.poly){
+    const q=f.poly;
     X.save();
+    // the wall the tags actually sit on - solid, it is measured
     X.strokeStyle=css('--line'); X.lineWidth=2;
-    X.strokeRect(PX(f.x0),PY(f.y1),(f.x1-f.x0)*view.s,(f.y1-f.y0)*view.s);
-    // the width was never measured by the survey - draw those two walls dashed
+    X.beginPath(); X.moveTo(PX(q[0][0]),PY(q[0][1])); X.lineTo(PX(q[1][0]),PY(q[1][1]));
+    X.stroke();
+    // the other three - dashed, nothing in the survey constrains the width
     X.setLineDash([7,5]); X.strokeStyle=css('--dim'); X.lineWidth=1.5;
-    X.beginPath(); X.moveTo(PX(f.x0),PY(f.y0)); X.lineTo(PX(f.x1),PY(f.y0)); X.stroke();
-    X.restore();
+    X.beginPath();
+    for(let i=1;i<4;i++){X.moveTo(PX(q[i][0]),PY(q[i][1]));
+      X.lineTo(PX(q[(i+1)%4][0]),PY(q[(i+1)%4][1]));}
+    X.stroke(); X.restore();
     X.fillStyle=css('--dim'); X.font='11px "IBM Plex Mono",monospace';
-    if(f.long_label){X.fillText(f.long_label,PX((f.x0+f.x1)/2)-28,PY(f.y1)-7);}
-    if(f.short_label){X.save();X.translate(PX(f.x0)-9,PY((f.y0+f.y1)/2));X.rotate(-Math.PI/2);
-      X.fillText(f.short_label,-32,0);X.restore();}
+    if(f.long_label){
+      const mx=(q[0][0]+q[1][0])/2,my=(q[0][1]+q[1][1])/2;
+      X.fillText(f.long_label,PX(mx)-26,PY(my)-8);
+    }
+    if(f.short_label){
+      const mx=(q[0][0]+q[3][0])/2,my=(q[0][1]+q[3][1])/2;
+      X.fillText(f.short_label,PX(mx)-70,PY(my)+4);
+    }
   }
   const ids=Object.keys(D.cams).sort();
   const cols=[css('--cam1'),css('--cam2'),css('--accent'),css('--ok')];
@@ -1058,7 +1068,7 @@ def main():
 
     if not a.no_field and a.field_long and a.field_short:
         STATE["field"] = dict(
-            x0=0.0, x1=a.field_long, y0=None, y1=None,
+            poly=None, x0=0.0, x1=a.field_long, y0=None, y1=None,
             long_label="%.2f ft" % (a.field_long / 0.3048),
             short_label="%.0f in (assumed)" % (a.field_short / 0.0254))
 
@@ -1069,18 +1079,57 @@ def main():
 
     # the field rectangle is anchored to the wall the tags are on, once we have them
     def anchor():
+        """Lay the field outline along the REAL wall, not along the axes.
+
+        The layout frame is anchored to whichever tag the survey used as its
+        reference, so its axes have no relationship to the room.  Drawing an
+        axis-aligned rectangle therefore paints a wall a couple of degrees away
+        from the true one, and every tag on it looks tilted - which is a lie
+        about the tags.  Fit the wall to the tags that sit on it instead.
+        """
         while True:
             time.sleep(1.0)
             with LOCK:
-                tags = STATE["tags"]
-                f = STATE["field"]
-            if not (f and tags and f.get("y0") is None):
+                tags = dict(STATE["tags"])
+                f = dict(STATE["field"]) if STATE["field"] else None
+            if not (f and len(tags) >= 2 and f.get("poly") is None):
                 continue
-            ys = [v["y"] for v in tags.values()]
-            top = max(ys)
+            # group tags by which way they face; the biggest group is the wall
+            items = sorted(tags.items(), key=lambda kv: int(kv[0]))
+            groups = []
+            for tid, v in items:
+                for g in groups:
+                    d = abs(((v["yaw"] - tags[g[0]]["yaw"] + 180) % 360) - 180)
+                    if d < 35:
+                        g.append(tid)
+                        break
+                else:
+                    groups.append([tid])
+            wall = max(groups, key=len)
+            if len(wall) < 2:
+                continue
+            P = np.array([[tags[t]["x"], tags[t]["y"]] for t in wall])
+            c = P.mean(axis=0)
+            u = np.linalg.svd(P - c)[2][0]           # direction along the wall
+            nz = np.mean([math.radians(tags[t]["yaw"]) for t in wall])
+            n = np.array([math.cos(nz), math.sin(nz)])   # normal, into the room
+            n -= u * float(n @ u)
+            nn = np.linalg.norm(n)
+            if nn < 1e-6:
+                continue
+            n /= nn
+            allp = np.array([[v["x"], v["y"]] for v in tags.values()])
+            t0 = float(np.min((allp - c) @ u))
+            p0 = c + u * t0
+            L, W = a.field_long, a.field_short
+            poly = [(p0 + u * s_ + n * w_).tolist()
+                    for s_, w_ in ((0, 0), (L, 0), (L, W), (0, W))]
             with LOCK:
-                STATE["field"]["y1"] = top
-                STATE["field"]["y0"] = top - a.field_short
+                STATE["field"]["poly"] = poly
+                STATE["field"]["wall_deg"] = math.degrees(math.atan2(u[1], u[0]))
+                STATE["field"]["wall_tags"] = [int(t) for t in wall]
+            print("  field outline fitted to tags %s, wall at %+.2f deg"
+                  % ([int(t) for t in wall], math.degrees(math.atan2(u[1], u[0]))))
     threading.Thread(target=anchor, daemon=True).start()
 
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
