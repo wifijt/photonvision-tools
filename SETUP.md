@@ -11,23 +11,30 @@ standing in front of the camera holding a board.
 
 ## 0. What you need
 
-On the **Pi** — all of these are already present on the PhotonVision image
-except where noted:
+**Nothing below ships on the PhotonVision image** — not even `pip3` — and the
+package lists are stale on a fresh boot. Checked against the apt history on
+this Pi: every one of these was installed after the fact.
+
+On the **Pi**:
 
 ```
-python3 3.11          msgpack   websockets   numpy
-ntcore + photonlibpy  (robotpy-native-ntcore, photonlibpy)
-smbus2                (only if you want i2c probing; not required)
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    python3-msgpack python3-websockets python3-pip
+sudo pip3 install --break-system-packages pyntcore photonlibpy
 ```
 
-Check with:
+`msgpack` and `websockets` are needed by everything. `pyntcore` is needed only
+by photontune's daemon mode. `photonlibpy` is optional and expensive to skip:
+without it photontune cannot decode detections off NetworkTables and falls back
+to the websocket at ~9 results/s instead of ~43. `numpy` arrives with
+photonlibpy.
+
+Confirm:
 
 ```
 python3 -c "import msgpack, websockets, ntcore, photonlibpy, numpy; print('ok')"
 ```
-
-If anything is missing: `pip3 install msgpack websockets photonlibpy` (numpy
-and ntcore arrive with photonlibpy's dependencies).
 
 On your **laptop**, only two:
 
