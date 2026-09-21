@@ -130,7 +130,9 @@ board was not fully found is discarded silently.
 or by pressing Ctrl-C, and the existing calibration survives.
 
 Repeat for the second camera. To calibrate a *different* resolution, add
-`--mode <index>` — `csi_cameras.py --show` lists the modes.
+`--mode <index>`. The index is the position in the dashboard's resolution
+dropdown, counting from 0; `--dry-run` prints the mode and the resolution it
+resolves to, so confirm there before shooting.
 
 ---
 
