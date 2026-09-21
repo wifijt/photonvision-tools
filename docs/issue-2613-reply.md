@@ -40,6 +40,36 @@ That also explains the title: **the published corners stay correct**, because
 they are detected in the real, unrotated image. Only the pose solved from them
 is wrong.
 
+### How a user reaches this
+
+It is one control on the first tab of the dashboard — a `pv-select` labelled
+**"Orientation"** (`photon-client/src/components/dashboard/tabs/InputTab.vue:171-178`),
+sitting alongside exposure and brightness. Mounting a camera sideways to fit a
+robot is common, and this is where you would go to correct it.
+
+What makes it hard to catch is that every visible signal says it worked.
+`photon-camera-stream.vue:41-42` rotates the dashboard preview for modes 1 and 3,
+so the picture turns the right way up:
+
+- preview looks correct
+- tags are detected
+- overlays land on the tags
+- reprojection error is normal (0.196 px here at `DEG_90_CCW`, against 0.199 at
+  `DEG_0`)
+- multi-tag solves succeed
+
+and the pose is silently out by ~25 cm, with nothing anywhere indicating it.
+
+A team that hits this has no reason to suspect the rotation setting. The likely
+path is recalibrating the camera, re-surveying the field layout, or retuning
+`addVisionMeasurement` standard deviations — all of which leave the fault in
+place.
+
+It is also worth noting which configuration is affected: CSI camera on a
+Raspberry Pi, which is the common FRC setup. A USB camera on the same Pi goes
+through `CpuImageProcessor` and should be unaffected, which may be why this has
+persisted — the people most likely to investigate are on the path that works.
+
 ### Falsifiable prediction, and it held
 
 If this is the mechanism, `DEG_180_CCW` should be *unaffected*, because 180 is
