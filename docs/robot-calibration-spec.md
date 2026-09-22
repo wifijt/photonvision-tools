@@ -149,6 +149,76 @@ Same hazard, opposite polarity.
 - The robot-side logger never writes setpoints. Commanding and logging are
   separate classes so that a logging bug cannot move the robot.
 
+## Operating it
+
+### Who drives
+
+**The robot drives the profile; you hold a button the whole time.** Each routine
+is a WPILib command bound to hold-to-run on the operator controller, so letting
+go stops it — a dead-man switch that does not depend on the laptop, the network,
+or the tool being correct. The laptop *arms* a routine; a human *commits* to it.
+Nothing the analyzer does can put the robot in motion.
+
+This is why the routines are driven rather than hand-driven. Hand-driving cannot
+hold a speed steady enough to separate latency from wheel scale, and the whole
+design rests on that separation.
+
+### Logging: one file, one clock
+
+The robot subscribes to PhotonVision over NetworkTables and logs vision
+**alongside** odometry and gyro through `DataLogManager`, to a USB stick on the
+roboRIO.
+
+That is the deliberate part. Logging both streams on the roboRIO puts them in
+the **same timebase**, so the only unknown left is PhotonVision's capture-time
+offset — which is a parameter the tool solves. Logging vision on the laptop
+instead would add network clock skew on top of it, and two unknowns that sum
+cannot be separated.
+
+Full rate, and it survives a wifi dropout, which NT streaming to a laptop does
+not. The laptop still watches NT live, but only to show the operator what is
+happening. The analyzer reads the `.wpilog` afterwards —
+`wpiutil.log.DataLogReader`, confirmed available in Python, so there is no
+conversion step.
+
+### A session, start to finish
+
+Roughly 30 minutes on the floor the first time.
+
+| | needs | time | moves? |
+|---|---|---|---|
+| 0. Survey the tags | `solve_layout.py` | once, not per session | no |
+| 1. Static | tags in view, robot parked | 3 min | no |
+| 2. Spin | ~2 m circle | 2 min | in place |
+| 3. Straight x4 | **a clear 6-8 m lane with tags visible** | 10 min | yes |
+| 4. Free drive | open space | 2 min | yes |
+| 5. Analyze | laptop | 1 min | no |
+| 6. Re-run free drive | to confirm it improved | 2 min | yes |
+
+Step 6 is the point. The tool has to demonstrate that the residual dropped, on a
+run that was not fitted, or the calibration has not earned the constants it is
+asking you to paste.
+
+### Where you can actually do this
+
+- **Static and spin fit in a garage.** They need tags in view and about 2 m.
+- **The straight runs do not.** 6-8 m of clear lane with tags visible throughout
+  is a gym or a long hallway. Shorter runs work but the wheel-radius uncertainty
+  scales inversely with distance, so a 2 m run buys roughly a quarter of the
+  precision of an 8 m one.
+- **Step 1 alone is useful on day one.** Pigeon drift, vision noise floor and
+  the pose-estimator standard deviations need no drivetrain tuning and no space
+  at all — it is the first thing worth running on a protobot that has never
+  moved.
+
+### The carpet caveat
+
+Effective wheel radius is a property of the **surface**, not the robot. A number
+measured on a shop floor is wrong on competition carpet, and it moves with tread
+wear. Same rule as photontune: calibrate where you will play. The report states
+the surface it was measured on, because a constant without that context is a
+trap.
+
 ## Build order
 
 Everything except the Java half can be built and validated **before the
