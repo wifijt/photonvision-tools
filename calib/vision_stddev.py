@@ -286,9 +286,23 @@ def report(stations, args):
             print("      your uncertainty - it is only the part one viewpoint can")
             print("      show you.")
         rec = max(base_lin, bias)
+
+        # The d^2 shape is FITTED, so it is only supported over the range the
+        # stations actually span. A narrow span still gives a good constant at
+        # the range you measured; it does not license extrapolation.
+        r_lo = min(s["range"] for s in sts)
+        r_hi = max(s["range"] for s in sts)
+        span = r_hi / max(r_lo, 0.01)
+        print("  range span  %.2f - %.2f m  (%.1fx)" % (r_lo, r_hi, span))
+        if span < 1.8:
+            print("      Too narrow to fit the distance^2 shape. The constant")
+            print("      below is good AT THIS RANGE and must not be extrapolated")
+            print("      to the far end of a field. Widen the range, or treat the")
+            print("      d^2 scaling as inherited from AdvantageKit rather than")
+            print("      measured here.")
         print()
-        print("  // measured %s, %s, STATIONARY, %d stations"
-              % (time.strftime("%Y-%m-%d"), nick, len(sts)))
+        print("  // measured %s, %s, STATIONARY, %d stations, %.1f-%.1f m"
+              % (time.strftime("%Y-%m-%d"), nick, len(sts), r_lo, r_hi))
         print("  // linear scales as distance^2 / tagCount")
         print("  // floor set by between-station disagreement, not by scatter")
         print("  public static final double kLinearStdDevBaseline  = %.4f;  // m" % rec)
