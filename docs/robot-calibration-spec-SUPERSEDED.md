@@ -1,3 +1,28 @@
+# SUPERSEDED — see vision-health-spec.md
+
+**This document's conclusions are wrong. Kept for its degeneracy analysis, which
+is not.**
+
+Three adversarial audits in sequence killed the drivetrain half of this proposal:
+there is no published evidence that steer offsets or module mounts drift at all
+on modern hardware; the residual cannot see a misaligned CANcoder, returns a
+uniform unattributable signal for the straightedge-against-a-pair case, flags all
+four modules when the robot merely gains mass, and names the wrong module 48% of
+the time on simulated robots; and the field itself contributes 2-12 inches
+against a 1-2 inch target, which is an order of magnitude more than anything
+measured here. The community's answer — tag-relative alignment instead of global
+pose — was correct engineering, not a retreat.
+
+What survived is in `vision-health-spec.md`. Evidence is in `docs/evidence/`.
+
+Still worth reading here: the gauge argument (three yaw unknowns, two
+observables, and why the free direction does not affect the robot), the
+latency-versus-camera-translation separation and the trap in "drive it both
+ways", and the closed-loop rule — a closed loop hides the error in the sensor it
+closes on.
+
+---
+
 # What moved: drivetrain and camera drift detection
 
 **Status: spec, not built. Rewritten 2026-09-23** after three adversarial audits
