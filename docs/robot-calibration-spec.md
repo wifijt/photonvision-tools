@@ -1,14 +1,48 @@
-# Camera extrinsics and gyro mount yaw, measured against the tags
+# What moved: drivetrain and camera drift detection
 
-**Status: spec, not built. Rewritten 2026-09-23 after three independent
-adversarial audits.** The first draft proposed a joint calibration of odometry,
-the Pigeon and vision. Roughly half of it duplicated tools that already ship
-free, and several of its headline parameters were not identifiable from the data
-it proposed to collect. What follows is what survived, which is smaller, sharper,
-and fits in a garage.
+**Status: spec, not built. Rewritten 2026-09-23** after three adversarial audits
+and a correction to the premise.
 
-Target: swerve, Pigeon 2, CANcoder steer, Java/WPILib robot code, Python analyzer
-on a laptop.
+Target: swerve, Pigeon 2, CANcoder steer, Java/WPILib robot code, Python
+analyzer.
+
+---
+
+## The problem this actually solves
+
+The team does the rough calibration. They have to — Tuner X's swerve generator
+will not finish without CANcoder offsets, and the wheels get zeroed with a
+straightedge held against them. That is the baseline, and this tool does not
+replace it.
+
+**Then the robot drives.** Bolts loosen, a module shifts on its mounts, a
+CANcoder creeps, a camera gets knocked in the pit. Nothing announces any of it.
+The robot yaws slightly off course, vision starts fighting odometry, and three
+weeks go into an auto routine built on measurements that stopped being true
+after the first hard practice session.
+
+So the question is not "what are these constants" — the team already answered
+that, adequately, once. The question is **"what has moved since?"**
+
+### Why that is a much easier problem
+
+Every systematic error the audits identified as fatal to an absolute calibration
+is **common mode between two runs, and cancels in the difference**:
+
+| error | absolute calibration | drift detection |
+|---|---|---|
+| layout scale (a 1% mis-printed tag) | 1% error in every length | cancels |
+| per-tag survey scatter | a floor under everything | cancels if the tags do not move |
+| viewpoint-dependent pose bias, ~+/-10 mm | systematic, correlated with the regressor | cancels at the same viewpoint |
+| straightedge / jig error | imported directly | cancels — it is in the baseline too |
+| eyeballed wheel radius | wrong by up to 1/4 inch | cancels; the *change* is what matters |
+
+What is left is **precision**, and precision is the one thing these fits deliver
+well. The layout does not have to be accurate. It has to be *stable*, and tags
+screwed to a wall are stable.
+
+This is why the tool is worth building even though the absolute version was not:
+it needs no survey uncertainty, no gauge, no straightedge, and no truth.
 
 ---
 
@@ -31,22 +65,25 @@ garage.
 
 ## What is actually missing from FRC
 
-1. **`robotToCamera`, 6 DOF.** PhotonVision's pose-estimator documentation gives
-   no guidance at all on obtaining this `Transform3d` — no procedure, no
-   accuracy statement. Teams measure it off CAD or with a tape, and the error
-   goes straight into every pose estimate as a bias that never averages out.
-2. **Pigeon mount yaw relative to robot forward.** Gravity fixes pitch and roll;
-   it leaves yaw free. Tuner X's calibration is gravity-based, so it cannot
-   supply this one.
-3. **Vision measurement standard deviations**, measured rather than guessed, in
-   the form `SwerveDrivePoseEstimator` actually consumes, and as a function of
-   range and tag count rather than a single number.
-4. **Held-out validation as a practice.** Nobody in FRC does it, and it is the
-   only thing separating a calibration from a plausible-looking fit.
+Nothing in FRC tells a team that the robot has drifted out of the calibration it
+started the season with. Tuner X, SysId and AdvantageKit all *establish* values;
+none of them watch whether the values are still true.
+
+1. **Per-module steer, position and radius drift from the discarded kinematics
+   residual.** No vision, no tags, no field, no routine — it runs on ordinary
+   driving. This is the core of the tool. See below.
+2. **`delta - psi` — the robot's course error.** "It yaws left slightly", as a
+   number, tracked over time.
+3. **`psi + eps` — vision versus gyro heading agreement.** "Vision fights
+   odometry", as a number.
+4. **`robotToCamera` change.** PhotonVision's own docs give no procedure for
+   obtaining the `Transform3d` at all, let alone for noticing it has moved.
+5. **Vision measurement standard deviations**, measured rather than guessed, in
+   the form `SwerveDrivePoseEstimator` consumes, by range and tag count.
 
 ---
 
-## The gauge problem, which is the heart of this
+## The gauge problem, and why drift detection sidesteps it
 
 **You cannot measure the angle between the chassis and itself.** Three unknowns
 are all "a rotation between the body frame and something else":
@@ -83,22 +120,89 @@ pure body-frame rotation for *any* translation, so no driving direction breaks
 it. And the spin does not break it either: `delta` enters the drivetrain as
 `cos(delta)`, which at 0.4 deg is 24 ppm, far under the spin's own scatter.
 
-### The resolution: declare the gauge
+### The resolution: the free direction does not matter
 
-**Robot forward is a convention, not a measurement.** Pin `delta = 0` by jigging
-the wheels against a straightedge when you set the CANcoder offsets — which is
-what you do anyway — and *define* robot forward as the kinematics frame. Then
-`psi = O1` and `eps = O2 - psi`, and both are determined.
+An earlier draft said to pin `delta = 0` with a straightedge against the wheels
+and call that robot forward. **That is wrong, and it is wrong in the way that
+matters most** — the straightedge is a slightly bowed board, held up by eye and
+taken away before the wheel is nudged. Defining the frame that way imports the
+very error the tool exists to find.
 
-The cost is honest and must be reported: **jig error goes directly into both**.
-A 0.3 deg straightedge error is 0.3 deg on mount yaw and on camera yaw. The tool
-states the assumed gauge on every report and treats jig accuracy as an input
-uncertainty, not as zero.
+It is also unnecessary. Work out what the robot actually does. Commanded
+field-relative velocity `v_f`; the code converts through gyro heading
+`theta_g = theta_true + psi`; the modules physically point `delta` off what
+kinematics believes. The velocity the robot really travels at is
 
-The alternative — publishing only `psi-delta` and `psi+eps` and no individual
-angles — is supported with `--no-gauge`, for anyone who does not trust the jig.
+```
+v_physical = R(theta_true) R(delta) R(-theta_true - psi) v_f  =  R(delta - psi) v_f
+```
+
+**The course error is `delta - psi`, which is exactly `-O1`.** Under the gauge
+shift, `delta` and `psi` move together and it cancels. The same holds for vision:
+what matters is `psi + eps = O2`.
+
+So **both functionally relevant combinations are observable, and the
+unobservable direction has no effect on the robot.** There is nothing to pin and
+no board to trust. The tool reports:
+
+- `delta - psi` — how far off course the robot drives when told to go straight,
+  field-relative. This is "the robot yaws left ever so slightly", as a number.
+- `psi + eps` — whether vision and the gyro agree about which way the robot
+  faces. This is "vision fights odometry", as a number.
+
+Where you apply the correction is free: fold it into the CANcoder offsets, the
+gyro offset, or `robotToCamera`. All three are equivalent for pose, because that
+is precisely the free direction. Folding it into the CANcoder offsets is
+preferred only because it leaves the wheels pointing where the code thinks they
+point, which is easier for the next person to reason about.
 
 ---
+
+## The over-determined drivetrain: per-module errors, with no vision at all
+
+Four modules report 8 numbers. The chassis has 3 degrees of freedom.
+`SwerveDriveKinematics.toChassisSpeeds` least-squares them down to 3 and
+**discards the other 5 dimensions every loop**. Those 5 are where a
+mis-zeroed CANcoder, a mis-mounted module and an eyeballed wheel radius live.
+
+Measured against robotpy's wpimath, script and raw numbers in
+`docs/evidence/swerve_residual_observability.py`:
+
+```
+A  translate, module0 steer +2 deg   residuals 0.04420 0.02769 0.01256 0.01212
+B  translate, ALL     steer +2 deg   residuals 0.00000 0.00000 0.00000 0.00000
+D  translate, module0 radius -2%     residuals 0.02550 0.00707 0.01581 0.00707
+
+module POSITION error 15 mm:
+   pure translate 2 m/s   0.00000 0.00000 0.00000 0.00000
+   pure translate 4 m/s   0.00000 0.00000 0.00000 0.00000
+   pure rotate   2 rad/s  0.01912 0.01186 0.00530 0.00530
+   pure rotate   4 rad/s  0.03824 0.02372 0.01061 0.01061
+```
+
+Three results the design rests on:
+
+1. **A common steer bias is invisible here.** Case B is *exactly* zero — the fit
+   absorbs it as a rotated chassis velocity (`vy = 2 sin 2 deg = 0.0698`). Only
+   vision can see it. That is why the vision half of this tool exists.
+2. **Per-module deviations need no vision, no tags, no survey and no field.**
+   Case A picks module 0 out of its siblings by 1.6-3.6x. This runs on ordinary
+   driving data, in a hallway, on day one.
+3. **The three faults separate by signature.** Module position error is
+   **exactly zero** under pure translation and scales with `omega`; steer error
+   is present under pure translation and scales with `|v|`; a radius error lies
+   along the module's own travel direction. Drive a mix of translation and
+   rotation and all three are distinguishable.
+
+This is the part that answers the actual problem: a team sets CANcoder offsets
+by holding a bowed board against the wheels, accepts "good enough", and then
+spends three weeks debugging an auto routine that was never going to work. The
+residuals were there the whole time, every loop, and nothing was looking at them.
+
+**Absolute scale still comes from elsewhere.** These residuals are *relative* —
+they find the odd module out. A shared error across all four (every wheel worn
+the same) is invisible to them, exactly as a common steer bias is. Absolute
+radius comes from AdvantageKit's spin routine or from vision.
 
 ## The remaining degeneracies, and what breaks each
 
@@ -206,131 +310,142 @@ invalidates the number.
 
 ## Preconditions
 
-Refuses to run without all of these. Each has already produced a silent,
-confident, wrong answer on this hardware.
+Drift detection compares two runs, so the requirement is **sameness**, not
+accuracy. Each item below has already produced a silent wrong answer on this
+hardware, or would silently break a comparison.
 
-1. **photontune's structural baseline asserted**, in particular
-   `inputImageRotationMode = DEG_0`. A non-zero rotation corrupts the multi-tag
-   pose by ~0.43 m while the preview and published corners stay correct. This rig
-   ran with `DEG_90_CCW` set from the start, injecting that into every solve.
-   See PhotonVision issue #2613.
-2. **A camera calibration at the active resolution.** Without one and with
-   `solvePNPEnabled`, PhotonVision publishes nothing at all — indistinguishable
-   from a dead camera.
-3. **A layout with per-tag uncertainty and co-visibility degree.** Does not exist
-   yet: `solve_layout.py` currently emits only `ID` and `pose`. **This is a hard
-   blocker and it is the first thing to build.**
-4. **The gauge declared** — jig accuracy stated, or `--no-gauge`.
-5. **Tuner X swerve setup and a tuned velocity loop** (SysId or AdvantageKit
-   feedforward) must come first. A wrong nominal wheel radius in the *setpoint*
-   is harmless — vision measures the true distance, and the separations only need
-   the speeds to genuinely differ — but an untuned loop cannot hold a speed.
+1. **The team's rough calibration is done.** Tuner X swerve setup, CANcoder
+   offsets, a tuned velocity loop. This is an input, not a competitor — the tool
+   measures departure from it and cannot run before it exists.
+2. **The pipeline configuration is identical between runs.** photontune's
+   structural baseline asserted, in particular `inputImageRotationMode = DEG_0`.
+   A rotation change between baseline and re-check masquerades perfectly as
+   camera drift, and a non-zero rotation corrupts the multi-tag pose by ~0.43 m
+   while the preview and published corners stay correct — this rig ran that way
+   from the start. See PhotonVision issue #2613.
+3. **A camera calibration at the active resolution**, unchanged between runs.
+   Without one, and with `solvePNPEnabled`, PhotonVision publishes nothing at
+   all — indistinguishable from a dead camera. Recalibrating a camera between
+   runs invalidates the comparison; record the calibration's identity.
+4. **The same layout, and it has not moved.** Recorded by content hash. The
+   layout does **not** need to be accurate — errors in it cancel — but comparing
+   across two different layouts is meaningless, and the tool refuses.
+5. **Repeatability established.** Three back-to-back baselines without touching
+   the robot. Until that exists there is no threshold and nothing can be flagged.
 
-## The error budget
+Note what is *no longer* required, and was in the previous draft: per-tag layout
+uncertainty, a declared gauge, and a straightedge. All three were needed only for
+absolute numbers.
 
-Three terms, and the first draft carried only one.
+## The error budget, and what it costs to measure a change
 
-- **Layout scatter.** Per-tag survey noise. Improves with more survey data.
-  Computed over the **run baseline**, not the summed path length, and with no
-  `sqrt(N)` reduction across runs — it is the same layout every time, so the
-  error is fully correlated.
-- **Layout scale.** `solve_layout.py` takes `tag_size` as an argument and it is
-  the *only* metric input to the bundle adjustment. **A 1% printing error scales
-  the entire layout, every vision translation, and every length this tool
-  reports.** Nothing in any routine can detect it; single-tag PnP cannot
-  cross-check it because it uses the same number. **Measure a printed tag with a
-  ruler and enter the real edge length.** This is the largest error in the system
-  and the cheapest to eliminate.
-- **Viewpoint-dependent pose bias.** `calibrate_mount.py` measured roughly
-  +/-10 mm that "no amount of averaging at one viewpoint removes". It is
-  systematic, comparable to the layout term, and **correlated with position along
-  a run**, so it lands directly in whatever is being regressed against distance.
-  Absent from the first draft entirely.
+Three terms, and what matters is how each behaves **between two runs**.
 
----
+- **Common mode — cancels.** Layout scale, per-tag scatter, viewpoint bias, jig
+  error, nominal wheel radius. All of it, provided the tags do not move and the
+  re-check is taken from comparable viewpoints. This is the whole reason the
+  tool works.
+- **Repeatability — the real limit.** A drift threshold is meaningless without
+  knowing the spread of the measurement itself. **The tool establishes its own
+  repeatability before it is allowed to flag anything**: take the baseline three
+  times, back to back, without touching the robot, and the scatter across those
+  is the floor. Anything smaller than it is not a detection.
+- **Condition drift — the thing that fools it.** Carpet vs concrete, battery
+  voltage, tyre temperature, and the viewpoint the re-check was taken from. These
+  do not cancel, and they are the likely source of a false alarm. Log them, and
+  refuse to compare runs whose conditions differ beyond stated bounds.
+
+Absolute accuracy is **out of scope**. When the tool says a module moved 1.4 deg,
+it means 1.4 deg *relative to the baseline*, not 1.4 deg from true. That is what
+the mechanic needs to know, and it is what can honestly be claimed.
 
 ## Routines
+
+### 0. Continuous — no routine, no enable, no operator
+
+Per-module residuals computed every loop from whatever the robot is already
+doing. Practice, a match, driving it onto a cart. No tags, no vision, no space,
+nobody holding a button. This is the product; everything below is supporting.
+
+Output is a per-module time series, and the useful view is its **trend**: a
+module whose residual was flat for three weeks and has climbed since Tuesday has
+a loose bolt, and the mechanic is told which module and which axis.
 
 ### 1. Static — no enable, no joystick, no dead-man
 
 Robot code, NetworkTables and `DataLogManager` all run **while the robot is
-disabled**. This routine needs no Driver Station enable, nobody holding anything,
-and no drivetrain at all.
+disabled**, so this needs no Driver Station enable and no drivetrain.
 
-Produces: vision noise floor; **vision standard deviations as a function of range
-and tag count**, in the form `SwerveDrivePoseEstimator` consumes; timestamp
-health check; Pigeon drift rate and mount tilt `phi`.
+Produces: vision noise floor; **vision standard deviations by range and tag
+count**, in the form `SwerveDrivePoseEstimator` consumes; timestamp health check;
+Pigeon drift rate and mount tilt `phi`; and the two-camera disagreement figure.
 
-**Most of this needs no robot.** Everything except Pigeon drift is measurable
-against wall tags today. It is the first deliverable and it ships alone.
+**Most of it needs no robot** — everything except Pigeon drift is measurable
+against wall tags today. It ships first, alone.
 
-It also states plainly what it is: a **stationary** noise floor. photontune's
-README makes the same point about itself — *"every plateau it can find is a
-plateau in the one condition that does not matter."* Static noise is not motion
-noise, and the report says so rather than implying the number covers driving.
+It states plainly what it is: a **stationary** noise floor. photontune's README
+makes the same point about itself — *"every plateau it can find is a plateau in
+the one condition that does not matter."*
 
 ### 2. Spin — two turns each direction, slowly
 
-Produces: `robotToCamera` bearing, radius and yaw (via `calibrate_mount.py`'s
-shared-centre circle fit); cross-track camera translation; Pigeon mount yaw
-against the declared gauge; `R_module / r_wheel` for the CAD cross-check.
+Produces: `delta - psi`, `psi + eps`, `robotToCamera` bearing, radius and yaw
+(via `calibrate_mount.py`'s shared-centre circle fit), and cross-track camera
+translation.
 
 Bidirectional because reversing `omega` cancels the `omega*dt` term. Not
 optional.
 
-### 3. Hold-heading strafe, two speeds — optional, needs a lane
+**Taken from the same marked spot each time.** Viewpoint bias is common mode only
+if the viewpoint is common. Mark the floor.
 
-Produces: the along-track camera translation and the differential timestamp
-residual. **Skip it if you have no space** — the spin gives the rest, and this
-routine's original purpose (wheel radius) has moved to the AdvantageKit routine.
+### 3. Hold-heading strafe — optional, needs a lane
 
-### 4. Free drive — held out, and driven OUTSIDE the fitted envelope
+Along-track camera translation and the differential timestamp residual. Skip it
+if you have no space; the spin gives the rest.
 
-Deliberately at a speed and heading the fitted runs did not visit. See below for
-why "held out" alone is not enough.
+### Baseline and re-check
 
----
-
-## Validation, and why held-out residual is not sufficient
-
-The first draft crowned held-out vision-vs-odometry residual. That is
-**agreement, not accuracy**, and vision is the very thing the constants were
-fitted to. Any error that moves vision and the constants together leaves the
-residual near zero — layout scale, a frame-convention error, a systematic range
-bias. This is the same mistake as optimising reprojection error, which photontune
-already documents: *"it measures internal consistency of a fit, not pose
-accuracy."*
-
-Worse, the before/after framing **rewards** the failure. "Before" is CAD
-nominals, so a fit that absorbs a 1% layout scale error into its constants shows
-a *larger* improvement than a correct fit does.
-
-Four things replace it:
-
-1. **A parameter correlation matrix, published.** Any constant whose correlation
-   with another exceeds a stated threshold is reported as **not separately
-   determined** and is not printed as a pasteable number.
-2. **Null-direction injection in the adversarial pass.** Perturb the parameters
-   *along* a null direction and require the analyzer to answer "not observable"
-   rather than a confident wrong value. A fit that cannot fail is not a
-   measurement; a fit that cannot say *I cannot tell* is worse, because it prints
-   a constant and somebody pastes it.
-3. **A cross-method or physical-constraint check per parameter.** This is how
-   `calibrate_mount.py` actually earned its accuracy — five checks, of which
-   synthetic recovery was the *weakest*, and the decisive one was a physical
-   constraint: a barrel length that proved a tape reading wrong, *"a physical
-   constraint settled what 2500 frames could not."* Available here: a tape on the
-   camera baseline; the rigid measured cam1->cam2 transform; a chord-and-radius
-   prediction.
-4. **Held-out drive outside the fitted envelope**, so a compensating parameter
-   pair cannot predict it as well as the truth does.
-
-**A fourth verdict exists: "your constants are fine; the problem is elsewhere."**
-The measured history on this rig says the wins came from multi-tag, recalibration
-and camera aiming — not constants. A calibration tool that cannot return a null
-result will find a problem.
+A **baseline** is routines 1 and 2 run three times back to back, right after the
+team's rough calibration, with conditions logged. A **re-check** is the same
+routines under comparable conditions. The report is the difference, and the
+scatter across the three baseline repeats is the threshold that decides whether
+a difference means anything.
 
 ---
+
+## Validation: the threshold has to be earned before anything is flagged
+
+An absolute calibration has to prove it is *right*. A drift detector has to prove
+it is *quiet* — that it does not cry wolf when nothing has changed — and then
+that it fires when something has.
+
+Four things, in order:
+
+1. **Repeatability, measured.** Three back-to-back baselines with the robot
+   untouched. The scatter across them is the noise floor, and it *is* the
+   detection threshold. A tool that reports a 0.3 deg change with a 0.5 deg floor
+   is reporting nothing.
+2. **The null run.** Re-check on a different day, different battery, same robot,
+   nothing touched. **It must report no change.** This is the test that matters
+   most, because a drift detector's characteristic failure is a false alarm that
+   sends a mechanic to tighten a bolt that was already tight — and having done
+   so, they will never trust it again.
+3. **Physical sabotage, which transfers cleanly here.** This is the one place
+   photontune's approach carries over intact: loosen a specific module, shim a
+   camera by a known angle, deliberately mis-set one CANcoder by 2 deg. Ground
+   truth is a real thing done to real hardware, external to whoever wrote the
+   analyzer. Then check it names the right module and the right axis. That is
+   falsification, not a gradient check.
+4. **Cross-method agreement where it is free.** The two cameras have a rigid
+   measured transform; if one has moved, the vision fit and the camera-to-camera
+   disagreement must say so together. Two independent paths to the same
+   conclusion is worth more than either alone.
+
+Note what is *not* on this list, and was the previous draft's headline:
+**held-out vision-vs-odometry residual**. It measures agreement, not accuracy,
+and vision is what the parameters were fitted to. For drift detection it is worse
+than useless, because a compensating pair drifting together leaves it flat.
 
 ## Safety
 
@@ -400,36 +515,76 @@ speed drifted beyond a stated tolerance.
 
 ---
 
-## Staleness: the part with no end date
+## Output
 
-A tool that emits pasted constants cannot tell anyone they have gone stale. New
-wheels, a rebuilt module, a bumped camera.
+Not constants to paste. **A diff, with a part number.**
 
-**The two-camera disagreement monitor is the answer, and it is arguably a better
-product than the calibration.** Two cameras with a rigid measured transform
-(this rig: ~51.3 mm, yaw -29 deg) each produce an independent pose. Disagreement
-beyond the static noise floor means something moved. No fit, no robot, no
-routine — it runs continuously, during a match, and it catches the failure every
-other part of this design is blind to.
+```
+── drift report ──  2026-11-02 18:40   vs baseline 2026-09-28 (3 repeats)
+   layout  shop-wall-2026-10-02  (hash match)     pipeline config: match
+   camera calibrations: match      threshold: 3x baseline scatter
 
-Add: a versioned JSON schema and a tool that reads two records, so wheel radius
-across a season is a tread-wear measurement rather than an anecdote. And Pigeon
-bias moves with temperature, so a cold-gyro drift figure is not the match figure
-— log die temperature with it.
+DRIVETRAIN          from 41 min of ordinary driving, no routine
+   module      steer        position       radius
+   FL        +0.04 deg      -            -0.05%        within noise
+   FR        -0.02 deg      -            +0.03%        within noise
+   BL        +0.03 deg      -            -0.02%        within noise
+   BR        +1.41 deg    0.8 mm         -0.71%      ** CHANGED **
+        threshold 0.28 deg / 0.9 mm / 0.24%  (3x baseline scatter)
+        signature is steer-dominant and grew over 6 sessions, not a step.
+        -> CHECK THE BR MODULE'S STEER PULLEY AND CANCODER CLAMP BOLTS.
 
----
+COURSE ERROR
+   delta - psi        baseline -0.21 deg    now -1.58 deg    ** CHANGED **
+        the robot now drives 1.37 deg left of commanded, field-relative.
+        consistent with the BR steer drift above - expect this to go away
+        when BR is fixed. Recheck before changing anything else.
+
+VISION
+   psi + eps          baseline +0.04 deg    now +0.07 deg    within noise
+   cam0 -> cam1       baseline  51.3 mm / -29.01 deg
+                      now       51.2 mm / -28.97 deg        within noise
+        both cameras agree with each other and with the gyro. Nothing moved.
+
+CONDITIONS
+   carpet, 11.9 V mean (baseline 12.1), spin taken from the marked spot.
+
+VERDICT: one mechanical fault, BR module. Vision is clean. Do not re-zero
+         the other three modules - they have not moved.
+```
+
+Three things it does on purpose.
+
+**It names a part, not a parameter.** "BR steer +1.41 deg" is a number; "check the
+BR steer pulley and CANcoder clamp bolts" is an action. The tool exists to send
+somebody to the right corner of the robot with the right wrench.
+
+**It distinguishes a step from a trend.** A bolt working loose over six sessions
+looks different from a collision, and the fix is different too.
+
+**It says what has *not* moved, explicitly.** The failure mode of a drift report
+is a team re-zeroing all four modules because one was flagged. Saying "these
+three have not moved" is as important as the finding.
 
 ## Build order
 
-1. **`solve_layout.py` per-tag uncertainty and co-visibility degree.** The hard
-   blocker. Independently fixes the 0.77 deg / 24 mm mount-transform bend already
-   observed and attributed to a single-link tag.
-2. **The static routine, standalone, against wall tags.** No robot, no enable.
-   Ships on its own.
-3. **The two-camera disagreement monitor.** No robot.
-4. **Simulator and analyzer** for the spin — with the caveats below.
-5. **Java logger and routines**, once a robot exists.
-6. **Field validation.**
+The reframe moves most of the work forward. Nothing here is blocked on the layout
+uncertainty that blocked the previous draft, because drift detection does not
+need an accurate layout.
+
+1. **The per-module residual analyzer.** Buildable and testable **now**, with no
+   Pi, no robot and no tags — ground truth is WPILib's own kinematics, and the
+   observability is already demonstrated in
+   `docs/evidence/swerve_residual_observability.py`. This is the core product.
+2. **Baseline / re-check schema and the diff report.** Versioned JSON, condition
+   logging, content hashes, the repeatability threshold. Pure Python.
+3. **The static routine**, standalone against wall tags. No robot, no enable.
+   Gives the vision noise floor, the stddevs, and the two-camera figure.
+4. **The two-camera disagreement monitor**, continuous. No fit, no robot.
+5. **The Java logger** — per-module states, gyro, decoded vision scalars,
+   battery, conditions — once a robot exists.
+6. **Physical sabotage validation** on the real robot: loosen a known module,
+   shim a camera, mis-set one CANcoder.
 
 ### On simulator-first
 
@@ -455,14 +610,20 @@ And the record is not encouraging: DEFECTS.md notes that the real-hardware
 verdict matrix already missed **four deliberate reversions of the headline
 fixes, all green**.
 
-So the simulator stays, but its status changes: it is a **convention checker and
-a null-direction prober**, not evidence of accuracy. Accuracy comes from item 3
-of the validation list — a physical cross-check per parameter.
+Drift detection changes this favourably. Step 1's ground truth is **WPILib's own
+kinematics**, not a model written here — perturb a module in `SwerveDrive4Kinematics`
+and require the analyzer to name it. And step 6's sabotage is **physical**, on real
+hardware, exactly as photontune's is. The simulator's remaining job is convention
+checking and null-direction probing, which is what it is good for.
 
 ## Open
 
-- **Repo.** This contains Java and is not a PhotonVision tool. It wants its own
-  repo; the document lives here because moving a document is free.
-- Whether the optional strafe routine is worth building at all once wheel radius
-  is gone from it.
-- Re-check photonlibpy's timestamp path against the version actually deployed.
+- **Repo.** Contains Java, not a PhotonVision tool. Wants its own repo; the
+  document lives here because moving a document is free.
+- **How much ordinary driving is enough** for a per-module residual estimate to
+  beat its own noise floor. Unknown until measured; it sets whether this is a
+  per-session or per-week report.
+- **Absolute calibration is not cancelled, only deferred.** If a team never had a
+  good baseline, drift detection tells them nothing useful. The absolute version
+  of this document is in git history and its degeneracy analysis still holds.
+- Re-check photonlibpy's timestamp path against the deployed version.
