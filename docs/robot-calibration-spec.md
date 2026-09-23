@@ -158,51 +158,71 @@ point, which is easier for the next person to reason about.
 
 ---
 
-## The over-determined drivetrain: per-module errors, with no vision at all
+## What the drivetrain can see by itself, and what it cannot
 
 Four modules report 8 numbers. The chassis has 3 degrees of freedom.
-`SwerveDriveKinematics.toChassisSpeeds` least-squares them down to 3 and
-**discards the other 5 dimensions every loop**. Those 5 are where a
-mis-zeroed CANcoder, a mis-mounted module and an eyeballed wheel radius live.
+`SwerveDriveKinematics.toChassisSpeeds` least-squares them to 3 and discards the
+other 5 every loop. Some faults live in those 5. **Not all of them, and not the
+one that matters most.**
 
-Measured against robotpy's wpimath, script and raw numbers in
-`docs/evidence/swerve_residual_observability.py`:
+### The rule: a closed loop hides the error in the sensor it closes on
+
+The steer controller drives the **reported** CANcoder angle to the commanded
+angle. So the reported angle always equals the command, whatever the magnet
+offset is, and the physical misalignment leaves **no trace** in the module state.
+The drive encoder then measures only the component of the module's velocity along
+the wheel's actual heading — the perpendicular part is scrub, and nothing
+measures scrub. What survives is a `cos(delta)` deficit on the reported speed.
+
+Measured, physically honest harness in
+`docs/evidence/swerve_residual_physical.py`:
 
 ```
-A  translate, module0 steer +2 deg   residuals 0.04420 0.02769 0.01256 0.01212
-B  translate, ALL     steer +2 deg   residuals 0.00000 0.00000 0.00000 0.00000
-D  translate, module0 radius -2%     residuals 0.02550 0.00707 0.01581 0.00707
-
-module POSITION error 15 mm:
-   pure translate 2 m/s   0.00000 0.00000 0.00000 0.00000
-   pure translate 4 m/s   0.00000 0.00000 0.00000 0.00000
-   pure rotate   2 rad/s  0.01912 0.01186 0.00530 0.00530
-   pure rotate   4 rad/s  0.03824 0.02372 0.01061 0.01061
+fault                          translate 2 m/s    spin 2 rad/s
+wheel radius -2%                  0.025495          0.008485
+module mounted 15 mm off          0.000000          0.010607
+CANcoder off 1 deg                0.000194          0.000065
 ```
 
-Three results the design rests on:
+`1 - cos(1 deg) = 1.52e-4`, times 2 m/s, is `3.0e-4`. That is the entire signal.
+**A mis-zeroed CANcoder is not detectable from the drivetrain alone** — and it is
+the most common real fault, because the wheels are zeroed with a slightly bowed
+board held up by eye.
 
-1. **A common steer bias is invisible here.** Case B is *exactly* zero — the fit
-   absorbs it as a rotated chassis velocity (`vy = 2 sin 2 deg = 0.0698`). Only
-   vision can see it. That is why the vision half of this tool exists.
-2. **Per-module deviations need no vision, no tags, no survey and no field.**
-   Case A picks module 0 out of its siblings by 1.6-3.6x. This runs on ordinary
-   driving data, in a hallway, on day one.
-3. **The three faults separate by signature.** Module position error is
-   **exactly zero** under pure translation and scales with `omega`; steer error
-   is present under pure translation and scales with `|v|`; a radius error lies
-   along the module's own travel direction. Drive a mix of translation and
-   rotation and all three are distinguishable.
+An earlier draft of this document claimed otherwise, from a test that perturbed
+the reported angle while leaving the reported speed at full magnitude. That is
+not a state the hardware can produce. The retraction is recorded in the evidence
+file rather than deleted.
 
-This is the part that answers the actual problem: a team sets CANcoder offsets
-by holding a bowed board against the wheels, accepts "good enough", and then
-spends three weeks debugging an auto routine that was never going to work. The
-residuals were there the whole time, every loop, and nothing was looking at them.
+### What the residual does catch
 
-**Absolute scale still comes from elsewhere.** These residuals are *relative* —
-they find the odd module out. A shared error across all four (every wheel worn
-the same) is invisible to them, exactly as a common steer bias is. Absolute
-radius comes from AdvantageKit's spin routine or from vision.
+- **Per-module drive scale / wheel radius.** No loop corrects distance-per-
+  rotation, so the error stands in the reported state. Scales with speed.
+- **Module mounting position.** An error in the *model*, not in a sensor —
+  nothing closes a loop on where a module is bolted. **Exactly zero under pure
+  translation** and scaling with `omega`, which makes it cleanly separable from
+  everything else.
+
+Both need no vision, no tags, no field and no routine — ordinary driving is
+enough. Both are *relative*: a fault shared by all four modules is as invisible
+here as a common steer bias, and absolute scale still comes from AdvantageKit's
+spin routine or from vision.
+
+### What a mis-zeroed CANcoder needs instead
+
+Something **outside the steer loop**:
+
+1. **Vision — the reliable one.** It measures the course the robot actually took,
+   which is the `delta - psi` observable. This is why the vision half of the tool
+   is not optional and cannot be deferred.
+2. **The gyro**, which is independent of every module. A fighting module drags
+   the chassis off course through tyre scrub and force balance — real, but a
+   force-balance effect that ideal kinematics does not model, so its magnitude
+   cannot be predicted here and must be measured on hardware.
+3. **Steer motor current — a hypothesis, untested.** A misaligned module is held
+   against a lateral scrub load, so its steer motor should draw more at steady
+   state, and that is free on the CAN bus. Physically sound; no measurement
+   behind it. Worth an hour on a real robot before it is believed.
 
 ## The remaining degeneracies, and what breaks each
 
