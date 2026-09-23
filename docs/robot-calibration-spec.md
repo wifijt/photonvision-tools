@@ -1,356 +1,468 @@
-# Robot calibration: odometry, Pigeon 2, and robotToCamera
+# Camera extrinsics and gyro mount yaw, measured against the tags
 
-**Status: spec, not built.** Written 2026-09-22, before the protobot exists.
+**Status: spec, not built. Rewritten 2026-09-23 after three independent
+adversarial audits.** The first draft proposed a joint calibration of odometry,
+the Pigeon and vision. Roughly half of it duplicated tools that already ship
+free, and several of its headline parameters were not identifiable from the data
+it proposed to collect. What follows is what survived, which is smaller, sharper,
+and fits in a garage.
 
-Target: swerve, Pigeon 2, integrated drive encoders + CANcoders for steer,
-robot code in Java/WPILib. Analyzer in Python on a laptop; the robot side is a
-thin logger implementing a documented NetworkTables contract.
+Target: swerve, Pigeon 2, CANcoder steer, Java/WPILib robot code, Python analyzer
+on a laptop.
 
 ---
 
-## The idea
+## What this does NOT build, and why
 
-Do not tape-measure the robot and hope vision agrees. **The tags are the
-instrument.** A surveyed AprilTag layout is an absolute, drift-free position
-and heading reference bolted to the field, and every constant below can be
-measured against it.
+Naming the prior art first, because the first draft did not and that was its
+largest error.
 
-That inverts the usual order. You do not calibrate odometry and then check
-vision; you calibrate the gyro against vision, odometry against the gyro, and
-`robotToCamera` last, because it is defined relative to a robot origin that
-only exists once the first two do.
-
-## What it solves for
-
-| | parameter | from |
+| | who already does it | what is left for us |
 |---|---|---|
-| **Pigeon** | yaw scale factor | vision yaw over a spin |
-| | drift rate, deg/s | vision yaw with the robot parked |
-| | **mount yaw** relative to robot forward | motion — see below |
-| **Odometry** | effective wheel radius (shared, then per-module) | straight drive vs vision translation |
-| | module translations, as a check on CAD | spin vs straight disagreement |
-| | common steer zero bias | odometry travel direction vs vision travel direction |
-| **Vision** | `robotToCamera` per camera, 6 DOF | bidirectional runs + `calibrate_mount.py` |
-| **Both** | vision timestamp offset | the same path driven in both directions |
+| **effective wheel radius** | **AdvantageKit swerve templates** ship a Drive Wheel Radius Characterization auto routine: spin in place one rotation, print a radius. Same carpet caveat. No tag survey, no lane. | use it. Optionally cross-check against our spin. Nothing to build. |
+| **kS / kV / kA** | WPILib SysId, and AdvantageKit's feedforward routine | nothing. It is a **prerequisite**, not a competitor — see below. |
+| **Pigeon pitch/roll mount** | CTRE Tuner X mount calibration, gravity-based | nothing |
+| **steer direction / drive direction sanity** | Tuner X swerve validation | nothing |
+| **vision capture timestamp** | PhotonVision timestamps frames at start-of-exposure from the V4L2 buffer and photonlib carries them into roboRIO time | **a health check, not a constant** — see below |
 
-**Pigeon mount yaw is the one you cannot get from a wizard.** Gravity fixes
-pitch and roll — an accelerometer at rest sees down. It cannot see yaw. If the
-Pigeon is bolted down rotated a few degrees from robot forward, nothing
-stationary will ever tell you, and the error goes straight into every pose
-estimate as a heading bias. Motion against an absolute heading reference is the
-only way, and vision is that reference.
+Dropping the wheel-radius fit removes the requirement that made this a gym job:
+a clear 6-8 m lane with tags visible throughout. The remaining routines run in a
+garage.
 
-## What already exists and is reused
+## What is actually missing from FRC
 
-- `mount/calibrate_mount.py` — solves camera radius, bearing and
-  camera-to-camera yaw from a spin, validated to ~1° on a bench. It states its
-  own boundary: *"robot forward — YES, needs an anchor. Needs one straight
-  drive."* This tool supplies that anchor.
-- `survey/solve_layout.py` — the tag layout. **Hard prerequisite.**
-- `viz/field_viewer.py` / `analyze_rig_log.py` — the log-and-fit shape, jsonl
-  in, diagnosis out. Same pattern here.
-
-## Prerequisite that will silently ruin everything
-
-**A wrong tag layout is absorbed into the answers.** Calibrate against a layout
-that is 20 mm out and the fit will quietly put that error into wheel radius and
-report high confidence. The tool refuses to run without a layout that carries a
-stated uncertainty, and it propagates that uncertainty into every output rather
-than hiding it. Cameras also need a calibration at their active resolution —
-without one, `solvePNPEnabled` publishes nothing at all.
+1. **`robotToCamera`, 6 DOF.** PhotonVision's pose-estimator documentation gives
+   no guidance at all on obtaining this `Transform3d` — no procedure, no
+   accuracy statement. Teams measure it off CAD or with a tape, and the error
+   goes straight into every pose estimate as a bias that never averages out.
+2. **Pigeon mount yaw relative to robot forward.** Gravity fixes pitch and roll;
+   it leaves yaw free. Tuner X's calibration is gravity-based, so it cannot
+   supply this one.
+3. **Vision measurement standard deviations**, measured rather than guessed, in
+   the form `SwerveDrivePoseEstimator` actually consumes, and as a function of
+   range and tag count rather than a single number.
+4. **Held-out validation as a practice.** Nobody in FRC does it, and it is the
+   only thing separating a calibration from a plausible-looking fit.
 
 ---
 
-## Degeneracies, and the drive patterns that break them
+## The gauge problem, which is the heart of this
 
-This is the whole design. Each routine exists to separate two things that look
-identical in the wrong data.
+**You cannot measure the angle between the chassis and itself.** Three unknowns
+are all "a rotation between the body frame and something else":
 
-### Latency vs. camera translation
+```
+psi  Pigeon mount yaw          delta  common steer zero bias
+eps  robotToCamera yaw
+```
 
-At constant velocity a vision timestamp offset `dt` puts the camera `v·dt`
-behind where it should be — **indistinguishable** from mounting the camera
-`v·dt` further back. Laps at a steady speed cannot separate them, no matter how
-many.
+Motion against vision yields only **two** first-order observables:
 
-> **Drive the same path in both directions.** Reversing `v` flips the sign of
-> `v·dt` while the mount translation stays put. One sign-flip separates them
-> completely.
+```
+O1 = odometry travel direction - vision travel direction  =  psi - delta
+O2 = gyro heading             - vision heading            =  psi + eps
+```
 
-### Latency vs. wheel scale
+Two equations, three unknowns, with an exact null direction
+`(psi, delta, eps) -> (psi+a, delta+a, eps-a)`. Both observables are invariant
+along it. The first draft printed all three as independently measured. They are
+not.
 
-Wheel scale error grows with **distance**; latency error grows with **speed**.
+Verified against WPILib's own `SwerveDriveOdometry`, which takes heading from
+the gyro and only *translation* from the module deltas:
 
-> **The same straight run at two speeds.** Same distance, different `v`.
+```
+clean                 odo travel dir  +0.0000 deg   odo heading  +0.0000
+steer bias +2 deg     odo travel dir  -2.0000 deg   odo heading  +0.0000
+gyro mount yaw +2     odo travel dir  +2.0000 deg   odo heading  +2.0000
+steer -2 & gyro +2    odo travel dir  +4.0000 deg   odo heading  +2.0000
+```
 
-### Gyro scale vs. module geometry
+The escapes are closed. It holds under strafe too — a common steer bias is a
+pure body-frame rotation for *any* translation, so no driving direction breaks
+it. And the spin does not break it either: `delta` enters the drivetrain as
+`cos(delta)`, which at 0.4 deg is 24 ppm, far under the spin's own scatter.
 
-Spinning in place, a 2% small wheel radius and a 2% small module radius produce
-identical encoder counts for the same rotation. Vision yaw breaks it — it is
-absolute — but only for the gyro. Separating wheel radius from module radius
-needs CAD module positions taken as given, or the cross-check below.
+### The resolution: declare the gauge
 
-> **Spin, then drive straight, and require the wheel radius to agree.** If the
-> spin says one radius and the straight drive says another, your module
-> translations are wrong. That disagreement is the most useful number the tool
-> produces, because it is the one thing that cannot be explained away.
+**Robot forward is a convention, not a measurement.** Pin `delta = 0` by jigging
+the wheels against a straightedge when you set the CANcoder offsets — which is
+what you do anyway — and *define* robot forward as the kinematics frame. Then
+`psi = O1` and `eps = O2 - psi`, and both are determined.
 
-### Steer zero offsets
+The cost is honest and must be reported: **jig error goes directly into both**.
+A 0.3 deg straightedge error is 0.3 deg on mount yaw and on camera yaw. The tool
+states the assumed gauge on every report and treats jig accuracy as an input
+uncertainty, not as zero.
 
-Swerve odometry integrates *measured* steer angles, so a zero offset makes
-odometry believe the robot travelled in a direction rotated by that offset.
-A **common** bias across modules is directly observable as the angle between
-odometry's travel direction and vision's. Per-module offsets do not show up as
-a clean angle — they show up as scrub, excess residual, and wheel slip, and the
-tool reports them as a residual per module rather than pretending to solve them.
+The alternative — publishing only `psi-delta` and `psi+eps` and no individual
+angles — is supported with `--no-gauge`, for anyone who does not trust the jig.
+
+---
+
+## The remaining degeneracies, and what breaks each
+
+### Latency vs. camera translation — and the trap in "both directions"
+
+At constant velocity a timestamp error `dt` displaces the vision-implied pose by
+`v*dt` **along the field velocity**; a camera mount error displaces it by a
+vector **fixed in the body frame**. Two experiments both sound like "drive the
+path both ways" and only one works:
+
+- **Strafe back with the heading HELD.** Body frame unchanged, field velocity
+  reversed. The latency term flips sign; the mount term does not. **Separates.**
+  A swerve can do this. This is the routine.
+- **Turn 180 deg and drive back.** Velocity reverses *and* the body frame rotates
+  with it, so both terms flip together. **Separates nothing.**
+
+The second is the natural reading of the phrase and what a driver does by
+default. It must be stated as a hold-heading strafe or the routine is worthless.
+
+Both runs must share **one** pose anchor. Re-anchoring per run absorbs exactly
+the offset being measured.
+
+**Cross-track camera translation is not observable here at all.** During a
+constant-heading run `dR/dt = 0`, so a lateral mount offset is a constant
+body-frame offset, indistinguishable from initial-pose registration in both
+directions at every speed. Cross-track translation comes only from the spin,
+whose whole mechanism is that `dR/dt != 0`.
+
+### Camera bearing vs. omega*dt in the spin
+
+A timestamp offset during a spin rotates the camera's measured position around
+the circle by `omega*dt` — degenerate with an error in the camera's mount
+bearing at a single rotation rate. At 4 turns in 120 s, `omega = 0.209 rad/s`,
+and a 20 ms offset is **0.24 deg**, larger than the precision the fit will
+otherwise claim.
+
+**Reversing the spin flips `omega*dt` and leaves the bearing put.** This is why
+the spin is bidirectional. It is load-bearing, not a symmetry nicety.
+
+### Pigeon yaw scale vs. Pigeon mount tilt
+
+A Pigeon whose z-axis is off vertical by `phi` measures `omega*cos(phi)` for
+planar rotation — an exact scale factor. A reported "yaw scale" of 0.99934 is
+`cos(2.08 deg)`, which is a shim under one bolt, not a sensor gain error, and is
+far outside a Pigeon 2's actual gyro scale spec.
+
+**Break:** the accelerometer at rest gives `phi`. Report
+`yaw scale = cos(phi_measured) x g_sensor` so the operator sees which term
+dominates, instead of being invited to "fix" a gain that is really mechanical.
+
+### Wheel radius vs. module radius (informational only)
+
+Kept because the cross-check is still worth printing even though we no longer
+fit wheel radius ourselves.
+
+Spin encoder counts go as `omega * R_module / r_wheel`, so only the **ratio** is
+identified — and the first draft had the sign wrong. A small *wheel* radius
+drives counts **up**; a small *module* radius drives them **down**. One
+masquerades as the other only when their errors have **opposite** signs.
+
+A pure translation involves no `R_module`, so a straight run measures `r_wheel`
+alone. Comparing that against the spin's ratio checks the module translations
+against CAD. At a +/-6 mm layout, a 2% module error on a 0.4 m drive base is
+about 8 mm — comparable to the layout floor — so this check declares a detection
+threshold and reports **not measured** below it rather than printing a number.
+
+---
+
+## Vision timestamps: a health check, not a constant
+
+PhotonVision timestamps frames at **start of exposure** from the V4L2 buffer and
+photonlib carries that into the roboRIO's timebase through its TimeSync
+client/server pair. There is no constant to paste — the documented flow sends
+`result.getTimestampSeconds()` straight into `addVisionMeasurement`, and there is
+no WPILib or photonlib parameter that would accept an offset.
+
+So the tool fits a residual and **expects zero**. A residual of more than a few
+milliseconds is a fault report, not a measurement:
+
+- is the roboRIO the NT server?
+- what is `metadata.timeSinceLastPong`? (photonlib warns past 5 s)
+- do the PhotonVision and photonlib versions match?
+- is the analyzer reading `captureTimestampMicros`, or accidentally the DataLog
+  record timestamp? (see Logging)
+
+**Note the Java/Python split.** The Java path uses the synced clock. photonlibpy
+2026.0.1 does not — `getTimestampSeconds()` computes
+`ntReceiveTimestampMicros - (publishTimestampMicros - captureTimestampMicros)`,
+carrying an explicit `TODO - we don't trust NT4 to correctly latency-compensate`,
+which leaves the network transport term uncorrected. Verified by reading the
+installed package; **this was 2026.0.1 on a laptop, not the 2026.3.4 on the
+coprocessor**, and should be re-checked against the deployed version.
+
+The residual is still what contaminates the `robotToCamera` x-estimate, so the
+hold-heading strafe stays whether or not the residual turns out to be zero.
+
+And the encoder side is not free of latency either. Values logged at roboRIO
+time `T` describe the drivetrain at `T - tau_can` — status-frame period plus
+sample age. Both terms scale with `v`, so what is fitted is a **differential**
+offset, `dt_vision - tau_odometry`. A negative value is not a bug. The Phoenix
+status-frame configuration is recorded with the calibration, because changing it
+invalidates the number.
+
+---
+
+## Preconditions
+
+Refuses to run without all of these. Each has already produced a silent,
+confident, wrong answer on this hardware.
+
+1. **photontune's structural baseline asserted**, in particular
+   `inputImageRotationMode = DEG_0`. A non-zero rotation corrupts the multi-tag
+   pose by ~0.43 m while the preview and published corners stay correct. This rig
+   ran with `DEG_90_CCW` set from the start, injecting that into every solve.
+   See PhotonVision issue #2613.
+2. **A camera calibration at the active resolution.** Without one and with
+   `solvePNPEnabled`, PhotonVision publishes nothing at all — indistinguishable
+   from a dead camera.
+3. **A layout with per-tag uncertainty and co-visibility degree.** Does not exist
+   yet: `solve_layout.py` currently emits only `ID` and `pose`. **This is a hard
+   blocker and it is the first thing to build.**
+4. **The gauge declared** — jig accuracy stated, or `--no-gauge`.
+5. **Tuner X swerve setup and a tuned velocity loop** (SysId or AdvantageKit
+   feedforward) must come first. A wrong nominal wheel radius in the *setpoint*
+   is harmless — vision measures the true distance, and the separations only need
+   the speeds to genuinely differ — but an untuned loop cannot hold a speed.
+
+## The error budget
+
+Three terms, and the first draft carried only one.
+
+- **Layout scatter.** Per-tag survey noise. Improves with more survey data.
+  Computed over the **run baseline**, not the summed path length, and with no
+  `sqrt(N)` reduction across runs — it is the same layout every time, so the
+  error is fully correlated.
+- **Layout scale.** `solve_layout.py` takes `tag_size` as an argument and it is
+  the *only* metric input to the bundle adjustment. **A 1% printing error scales
+  the entire layout, every vision translation, and every length this tool
+  reports.** Nothing in any routine can detect it; single-tag PnP cannot
+  cross-check it because it uses the same number. **Measure a printed tag with a
+  ruler and enter the real edge length.** This is the largest error in the system
+  and the cheapest to eliminate.
+- **Viewpoint-dependent pose bias.** `calibrate_mount.py` measured roughly
+  +/-10 mm that "no amount of averaging at one viewpoint removes". It is
+  systematic, comparable to the layout term, and **correlated with position along
+  a run**, so it lands directly in whatever is being regressed against distance.
+  Absent from the first draft entirely.
 
 ---
 
 ## Routines
 
-Four. The first three are fitted; the fourth is never fitted and exists to
-falsify the first three.
+### 1. Static — no enable, no joystick, no dead-man
 
-1. **Static** — 3 min parked, tags in view. Pigeon drift rate, vision noise
-   floor, timestamp sanity, and the standard deviations the pose estimator
-   should actually be configured with. No motion, no risk, and it is the only
-   routine that can run the day the protobot first powers on.
-2. **Spin** — two turns each direction, slowly, tags in view throughout.
-   Gyro scale, module effective radii, camera radius and bearing.
-3. **Straight, bidirectional, two speeds** — four runs down a known-clear lane.
-   Wheel radius, latency offset, camera translation, common steer bias.
-4. **Free drive** — a figure-8 or just driving around. **Held out of the fit
-   entirely.** The report's headline number is the residual on this run: how
-   far vision and odometry disagree on data the fit never saw. Fitting error is
-   not evidence; held-out error is.
+Robot code, NetworkTables and `DataLogManager` all run **while the robot is
+disabled**. This routine needs no Driver Station enable, nobody holding anything,
+and no drivetrain at all.
 
-## Outputs
+Produces: vision noise floor; **vision standard deviations as a function of range
+and tag count**, in the form `SwerveDrivePoseEstimator` consumes; timestamp
+health check; Pigeon drift rate and mount tilt `phi`.
 
-Four artifacts: a console report, a paste-ready Java block, a JSON record, and a
-before/after field trace. Every parameter carries a value, an uncertainty and a
-**provenance** — which routine produced it — so a number that looks wrong leads
-straight back to the run that made it.
+**Most of this needs no robot.** Everything except Pigeon drift is measurable
+against wall tags today. It is the first deliverable and it ships alone.
 
-### The report
+It also states plainly what it is: a **stationary** noise floor. photontune's
+README makes the same point about itself — *"every plateau it can find is a
+plateau in the one condition that does not matter."* Static noise is not motion
+noise, and the report says so rather than implying the number covers driving.
 
-```
-── calibration report ──  2026-10-14 19:22   4 routines, 11.3 min of data
-   layout : shop-wall-2026-10-02.json   14 tags, stated uncertainty +/- 6 mm
-   surface: SHOP FLOOR, sealed concrete - NOT competition carpet
+### 2. Spin — two turns each direction, slowly
 
-PIGEON 2
-   yaw scale factor      0.99934   +/- 0.00021    spin, 4 turns both ways
-   drift rate            0.0021 deg/s             static, 180 s
-   mount yaw            -1.84 deg  +/- 0.09       spin + straight
-        Not obtainable at rest - gravity fixes pitch and roll, never yaw.
-        1.84 deg is 32 mm of cross-track error for every metre travelled.
+Produces: `robotToCamera` bearing, radius and yaw (via `calibrate_mount.py`'s
+shared-centre circle fit); cross-track camera translation; Pigeon mount yaw
+against the declared gauge; `R_module / r_wheel` for the CAD cross-check.
 
-ODOMETRY
-   wheel radius          0.049810 m +/- 0.000095  straight x4, 31.8 m total
-        nominal 0.050800 - effective is 1.95% smaller. Tread compression.
-   cross-check, spin     0.049775 m +/- 0.000210  spin
-        agrees within 0.15 sigma: module translations are consistent with CAD
-   common steer bias    +0.37 deg  +/- 0.06       odometry vs vision heading
-   per-module residual   FL 3.1 mm   FR 2.8   BL 3.4   BR 11.7 mm
-        BR is 3.5x its siblings, which is not noise. Check its CANcoder offset
-        and its tread. A shared-radius fit cannot absorb one odd module, so
-        this is reported rather than quietly averaged away.
+Bidirectional because reversing `omega` cancels the `omega*dt` term. Not
+optional.
 
-VISION
-   capture time offset   23.4 ms +/- 1.8          bidirectional straight runs
-        separated from mount translation by the direction flip: forward and
-        reverse disagreed by 46.9 mm at 1.0 m/s, which is 2 x v x dt.
-   robotToCamera  OV9281
-        x  +0.2413 m +/- 0.0021     y  -0.1524 m +/- 0.0019
-        z  +0.2032 m +/- 0.0094     <- weak, comes only from tag heights
-        roll +0.21 +/- 0.81   pitch -14.92 +/- 0.74   yaw -44.86 +/- 0.13 deg
-        roll and pitch are noisy by nature on flat ground. Reported, not chased.
+### 3. Hold-heading strafe, two speeds — optional, needs a lane
 
-HELD OUT - free drive, 2.1 min, used in NO fit
-   position residual     before  84.2 mm rms       after  21.3 mm rms
-   heading residual      before   2.11 deg         after   0.35 deg
-   worst single sample   before 214 mm             after    58 mm
+Produces: the along-track camera translation and the differential timestamp
+residual. **Skip it if you have no space** — the spin gives the rest, and this
+routine's original purpose (wheel radius) has moved to the AdvantageKit routine.
 
-ACCURACY, NOT PRECISION
-   The +/- above are the fit own scatter. The layout +/- 6 mm sits underneath
-   all of it: over 31.8 m of travel that is 0.019% on wheel radius, whatever
-   the fit claims. To do better, survey better.
+### 4. Free drive — held out, and driven OUTSIDE the fitted envelope
 
-VERDICT: apply. Held-out position error fell 75%.
-```
+Deliberately at a speed and heading the fitted runs did not visit. See below for
+why "held out" alone is not enough.
 
-Three things that report does on purpose.
+---
 
-**The headline is a number the fit never saw.** Residual on held-out data, before
-and after. A fit always explains its own data; that is not evidence of anything.
+## Validation, and why held-out residual is not sufficient
 
-**It separates precision from accuracy.** The `+/-` are the fit's internal
-scatter, and `calibrate_mount.py` already learned this lesson the hard way — a
-bootstrap will happily claim sub-millimetre precision on a measurement that is
-10 mm from the truth. The layout uncertainty is a floor under every number
-derived from it, stated as such.
+The first draft crowned held-out vision-vs-odometry residual. That is
+**agreement, not accuracy**, and vision is the very thing the constants were
+fitted to. Any error that moves vision and the constants together leaves the
+residual near zero — layout scale, a frame-convention error, a systematic range
+bias. This is the same mistake as optimising reprojection error, which photontune
+already documents: *"it measures internal consistency of a fit, not pose
+accuracy."*
 
-**It surfaces hardware, not just constants.** The per-module residual above is
-the tool finding a bad CANcoder offset or a worn tread. That is worth more than
-any constant it prints, and a fit that silently averaged it into a shared radius
-would have hidden it.
+Worse, the before/after framing **rewards** the failure. "Before" is CAD
+nominals, so a fit that absorbs a 1% layout scale error into its constants shows
+a *larger* improvement than a correct fit does.
 
-### The constants
+Four things replace it:
 
-```java
-// Generated by robotcal 2026-10-14 19:22 from run 2026-10-14T190422Z
-// Surface: shop floor (sealed concrete). Re-run on carpet before competition.
-// Held-out validation: 21.3 mm rms position, 0.35 deg heading.
-public static final double kWheelRadiusMeters   = 0.049810;  // +/- 0.000095
-public static final double kPigeonYawScale      = 0.99934;   // +/- 0.00021
-public static final double kPigeonMountYawDeg   = -1.84;     // +/- 0.09
-public static final double kVisionCaptureOffset =  0.0234;   // s, +/- 0.0018
-public static final Transform3d kRobotToCam0 = new Transform3d(
-    new Translation3d(0.2413, -0.1524, 0.2032),
-    new Rotation3d(Math.toRadians(0.21), Math.toRadians(-14.92),
-                   Math.toRadians(-44.86)));
-```
+1. **A parameter correlation matrix, published.** Any constant whose correlation
+   with another exceeds a stated threshold is reported as **not separately
+   determined** and is not printed as a pasteable number.
+2. **Null-direction injection in the adversarial pass.** Perturb the parameters
+   *along* a null direction and require the analyzer to answer "not observable"
+   rather than a confident wrong value. A fit that cannot fail is not a
+   measurement; a fit that cannot say *I cannot tell* is worse, because it prints
+   a constant and somebody pastes it.
+3. **A cross-method or physical-constraint check per parameter.** This is how
+   `calibrate_mount.py` actually earned its accuracy — five checks, of which
+   synthetic recovery was the *weakest*, and the decisive one was a physical
+   constraint: a barrel length that proved a tape reading wrong, *"a physical
+   constraint settled what 2500 frames could not."* Available here: a tape on the
+   camera baseline; the rigid measured cam1->cam2 transform; a chord-and-radius
+   prediction.
+4. **Held-out drive outside the fitted envelope**, so a compensating parameter
+   pair cannot predict it as well as the truth does.
 
-Copied, not applied. Nothing reaches the robot without a human pasting it.
+**A fourth verdict exists: "your constants are fine; the problem is elsewhere."**
+The measured history on this rig says the wins came from multi-tag, recalibration
+and camera aiming — not constants. A calibration tool that cannot return a null
+result will find a problem.
 
-### The JSON
-
-Every sample, every residual, every parameter with its covariance, the routines
-and their timestamps, the layout file and its hash. This is what makes a
-calibration comparable to the one before it — drift in wheel radius across a
-season is a tread-wear measurement, and it only exists if the records do.
-
-### The field trace
-
-Odometry path and vision path overlaid, before and after, in the style of
-`viz/field_viewer.py`. Not decoration: a systematic error has a **shape**.
-A wheel-radius error makes the paths diverge with distance, a mount-yaw error
-bows them apart on turns, and a latency error separates them only while moving.
-Reading the shape is often faster than reading the numbers.
-
-### When it will not apply
-
-Three outcomes are not "here are your constants":
-
-- **Worse than what you had.** Held-out residual did not improve. Reported as a
-  failure with the numbers, and the constants block is withheld — not printed
-  with a warning above it, because a printed constant gets pasted.
-- **Not observable from this data.** Too short a straight run, too few tags, a
-  spin that never completed. The parameter is reported as *not measured* rather
-  than as a weakly-constrained guess.
-- **The layout is the limit.** When layout uncertainty dominates the fit, it
-  says so and tells you that re-running the calibration cannot help. Surveying
-  again is the only thing that will.
+---
 
 ## Safety
 
-This one drives the robot, which is the exact inversion of photontune — that
-tool refuses to run while the robot is enabled; this one only runs while it is.
-Same hazard, opposite polarity.
+**Cancelling a command does not stop a motor.** It stops writing new values; a
+CAN motor controller holds its last output until told otherwise. The first draft
+said "letting go stops it", which is false and is the most likely way this tool
+hurts someone.
 
-- Routines are WPILib commands. Disable stops them, because disable stops
-  everything; there is no path that keeps motors commanded across a disable.
-- Every routine declares its required clear space **before** it moves, and the
-  operator confirms.
-- Speed and acceleration limits are arguments with conservative defaults, not
-  constants buried in the source.
-- The robot-side logger never writes setpoints. Commanding and logging are
-  separate classes so that a logging bug cannot move the robot.
+- Every routine implements `end(boolean interrupted)` with an unconditional
+  `drivetrain.stop()` — zero volts, not zero setpoint. Mandatory, not delegated
+  to a default command.
+- The drivetrain has a default command and it commands zero with no input.
+- `.withInterruptBehavior(kCancelIncoming)` so nothing steals the drivetrain
+  mid-routine. `whileTrue` will not reschedule a routine that was interrupted
+  while the trigger is still held — "held means running" is false without this.
+- `MotorSafety` enabled on drive outputs during routines.
+- **Teleoperated mode, never Practice.** Practice mode cycles match timings and
+  will auto-disable partway through a long routine.
+- The dead-man is **not** laptop-independent: the controller plugs into the
+  Driver Station, so it is a network signal at the DS packet period. Claiming
+  otherwise was wrong. It is still a good layer; it is not the only one.
+- The operator is pinned to the laptop and cannot see the far end of a long run.
+  Another reason routine 3 is optional.
 
-## Operating it
+## Logging
 
-### Who drives
+Vision and drivetrain both logged on the roboRIO via `DataLogManager`. The
+first draft's rationale — avoiding network clock skew — was wrong, since
+photonlib already corrects into roboRIO time. The real reasons stand: full rate,
+and it survives a wifi dropout.
 
-**The robot drives the profile; you hold a button the whole time.** Each routine
-is a WPILib command bound to hold-to-run on the operator controller, so letting
-go stops it — a dead-man switch that does not depend on the laptop, the network,
-or the tool being correct. The laptop *arms* a routine; a human *commits* to it.
-Nothing the analyzer does can put the robot in motion.
+Four traps, all of which produce plausible wrong numbers rather than errors:
 
-This is why the routines are driven rather than hand-driven. Hand-driving cannot
-hold a speed steady enough to separate latency from wheel scale, and the whole
-design rests on that separation.
+- **The USB stick is silently optional.** No stick, or a stick formatted exFAT or
+  NTFS, and logging falls back to `/home/lvuser/logs` — where, under 50 MB free,
+  WPILib **deletes** old logs while you are writing. FAT32, 32 GB or smaller. The
+  logger asserts `DataLogManager.getLogDir()` is on the USB path and **refuses to
+  arm a routine** otherwise.
+- **The DataLog record timestamp is not the capture timestamp.**
+  `DataLogManager.start()` auto-logs NT changes, so PhotonVision's raw topic
+  lands with an NT *receive* time — jittery, loop-phased, and exactly the thing
+  that would manufacture a bogus tens-of-milliseconds "latency". The analyzer
+  reads `captureTimestampMicros` and nothing else.
+- **Results are raw bytes in PhotonVision's own serialization**, version-coupled
+  to the build. The Java logger decodes each result and writes **plain scalar
+  entries** — capture timestamp, tag IDs, pose components, ambiguity,
+  `timeSinceLastPong`. Then the Python side needs no PhotonVision decoder at all.
+- **`DriverStation.startDataLog(DataLogManager.getLog())`.** Without it the
+  analyzer cannot tell a clean run from one disabled mid-lane by a comms dropout,
+  and will happily fit the coast-down.
 
-### Logging: one file, one clock
+**The 20 ms loop is not the resolution limit** and the first draft implied it was.
+Each result carries its own start-of-exposure timestamp, and
+`getAllUnreadResults()` returns every queued result rather than the newest — so
+the loop rate controls how often the queue is drained, not timestamp resolution.
+Using `getLatestResult()` instead discards most frames *and* couples the
+timestamp to loop phase, which is the only way the 20 ms figure becomes real.
+On this stack Phoenix 6's `SwerveDrivetrain` runs odometry on its own thread at
+250 Hz (CAN FD) / 100 Hz (CAN 2.0); sample the drivetrain state **at** each
+vision timestamp from the interpolating buffer, not at the nearest loop tick.
 
-The robot subscribes to PhotonVision over NetworkTables and logs vision
-**alongside** odometry and gyro through `DataLogManager`, to a USB stick on the
-roboRIO.
+**Log `RobotController.getBatteryVoltage()` and the battery identity per run.**
+Four routines plus a re-run is more than one battery, and since the separations
+rely on speeds genuinely differing, sag that changes speed between runs
+contaminates exactly what the design rests on. Reject any run whose measured
+speed drifted beyond a stated tolerance.
 
-That is the deliberate part. Logging both streams on the roboRIO puts them in
-the **same timebase**, so the only unknown left is PhotonVision's capture-time
-offset — which is a parameter the tool solves. Logging vision on the laptop
-instead would add network clock skew on top of it, and two unknowns that sum
-cannot be separated.
+---
 
-Full rate, and it survives a wifi dropout, which NT streaming to a laptop does
-not. The laptop still watches NT live, but only to show the operator what is
-happening. The analyzer reads the `.wpilog` afterwards —
-`wpiutil.log.DataLogReader`, confirmed available in Python, so there is no
-conversion step.
+## Staleness: the part with no end date
 
-### A session, start to finish
+A tool that emits pasted constants cannot tell anyone they have gone stale. New
+wheels, a rebuilt module, a bumped camera.
 
-Roughly 30 minutes on the floor the first time.
+**The two-camera disagreement monitor is the answer, and it is arguably a better
+product than the calibration.** Two cameras with a rigid measured transform
+(this rig: ~51.3 mm, yaw -29 deg) each produce an independent pose. Disagreement
+beyond the static noise floor means something moved. No fit, no robot, no
+routine — it runs continuously, during a match, and it catches the failure every
+other part of this design is blind to.
 
-| | needs | time | moves? |
-|---|---|---|---|
-| 0. Survey the tags | `solve_layout.py` | once, not per session | no |
-| 1. Static | tags in view, robot parked | 3 min | no |
-| 2. Spin | ~2 m circle | 2 min | in place |
-| 3. Straight x4 | **a clear 6-8 m lane with tags visible** | 10 min | yes |
-| 4. Free drive | open space | 2 min | yes |
-| 5. Analyze | laptop | 1 min | no |
-| 6. Re-run free drive | to confirm it improved | 2 min | yes |
+Add: a versioned JSON schema and a tool that reads two records, so wheel radius
+across a season is a tread-wear measurement rather than an anecdote. And Pigeon
+bias moves with temperature, so a cold-gyro drift figure is not the match figure
+— log die temperature with it.
 
-Step 6 is the point. The tool has to demonstrate that the residual dropped, on a
-run that was not fitted, or the calibration has not earned the constants it is
-asking you to paste.
-
-### Where you can actually do this
-
-- **Static and spin fit in a garage.** They need tags in view and about 2 m.
-- **The straight runs do not.** 6-8 m of clear lane with tags visible throughout
-  is a gym or a long hallway. Shorter runs work but the wheel-radius uncertainty
-  scales inversely with distance, so a 2 m run buys roughly a quarter of the
-  precision of an 8 m one.
-- **Step 1 alone is useful on day one.** Pigeon drift, vision noise floor and
-  the pose-estimator standard deviations need no drivetrain tuning and no space
-  at all — it is the first thing worth running on a protobot that has never
-  moved.
-
-### The carpet caveat
-
-Effective wheel radius is a property of the **surface**, not the robot. A number
-measured on a shop floor is wrong on competition carpet, and it moves with tread
-wear. Same rule as photontune: calibrate where you will play. The report states
-the surface it was measured on, because a constant without that context is a
-trap.
+---
 
 ## Build order
 
-Everything except the Java half can be built and validated **before the
-protobot exists**, which is the point of putting the simulator first.
+1. **`solve_layout.py` per-tag uncertainty and co-visibility degree.** The hard
+   blocker. Independently fixes the 0.77 deg / 24 mm mount-transform bend already
+   observed and attributed to a single-link tag.
+2. **The static routine, standalone, against wall tags.** No robot, no enable.
+   Ships on its own.
+3. **The two-camera disagreement monitor.** No robot.
+4. **Simulator and analyzer** for the spin — with the caveats below.
+5. **Java logger and routines**, once a robot exists.
+6. **Field validation.**
 
-1. **Simulator** — a synthetic swerve with known-truth parameters, configurable
-   noise, and deliberately injected latency, gyro scale error and steer bias.
-2. **Analyzer** — fits against the simulator. The acceptance test is recovering
-   injected truth, the same standard `calibrate_mount.py` was held to
-   (*"synthetic ground truth recovered exactly"*).
-3. **Adversarial pass** — sabotage each parameter in the simulator and require
-   the analyzer to catch it, in the style of `sabotage_test.py`. A fit that
-   cannot fail is not a measurement.
-4. **Java logger + routines** — once there is a robot to run them on.
-5. **Field validation** — the held-out residual against a real run.
+### On simulator-first
 
-Steps 1-3 are the majority of the work and need no hardware.
+The first draft claimed steps 1-3 were "most of the work" and justified it with
+`calibrate_mount.py`'s *"synthetic ground truth recovered exactly."* That is the
+first of **five** checks in that docstring and the weakest; the other four are
+cross-method or physical-constraint, against things the author did not write.
+
+A simulator and an analyzer written by the same person share a mental model: the
+swerve kinematics, the sign conventions, the tag-frame convention, the meaning of
+a capture timestamp. Every one of those has already bitten this project and none
+was caught by reasoning — the tag-frame rotation was found by brute-forcing all
+24 proper rotations, and the ntcore clock bug was found only against real data.
+Recovering an injected 23 ms from your own simulator proves nothing about
+whether the roboRIO logs what you think it logs.
+
+Nor does sabotage transfer cleanly. photontune's sabotage breaks **real**
+PhotonVision settings on **real** hardware and checks a **real** repair; ground
+truth is external to the author. Simulator sabotage perturbs a model parameter
+and checks the estimator of that same model notices — a gradient check, blind by
+construction to scrub, slip, module skew, CAN staleness and the viewpoint bias.
+And the record is not encouraging: DEFECTS.md notes that the real-hardware
+verdict matrix already missed **four deliberate reversions of the headline
+fixes, all green**.
+
+So the simulator stays, but its status changes: it is a **convention checker and
+a null-direction prober**, not evidence of accuracy. Accuracy comes from item 3
+of the validation list — a physical cross-check per parameter.
 
 ## Open
 
-- **Repo.** This spec sits in `photonvision-tools/docs/` because it is a
-  document and moving it is free. The tool itself contains Java and is not
-  really a PhotonVision tool, so it probably wants its own repo.
-- **Per-module wheel radii.** Worth solving only if the shared-radius residual
-  demands it. Start shared.
-- **Pitch and roll of `robotToCamera`** are observable from tag geometry but
-  noisy, and on flat carpet they barely matter. Report them, do not chase them.
+- **Repo.** This contains Java and is not a PhotonVision tool. It wants its own
+  repo; the document lives here because moving a document is free.
+- Whether the optional strafe routine is worth building at all once wheel radius
+  is gone from it.
+- Re-check photonlibpy's timestamp path against the version actually deployed.
