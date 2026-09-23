@@ -545,14 +545,21 @@ Not constants to paste. **A diff, with a part number.**
    camera calibrations: match      threshold: 3x baseline scatter
 
 DRIVETRAIN          from 41 min of ordinary driving, no routine
-   module      steer        position       radius
-   FL        +0.04 deg      -            -0.05%        within noise
-   FR        -0.02 deg      -            +0.03%        within noise
-   BL        +0.03 deg      -            -0.02%        within noise
-   BR        +1.41 deg    0.8 mm         -0.71%      ** CHANGED **
-        threshold 0.28 deg / 0.9 mm / 0.24%  (3x baseline scatter)
-        signature is steer-dominant and grew over 6 sessions, not a step.
-        -> CHECK THE BR MODULE'S STEER PULLEY AND CANCODER CLAMP BOLTS.
+   module     position       radius
+   FL           -           -0.05%        within noise
+   FR           -           +0.03%        within noise
+   BL           -           -0.02%        within noise
+   BR         0.8 mm        -0.71%      ** CHANGED **
+        threshold 0.9 mm / 0.24%  (3x baseline scatter)
+        grew over 6 sessions, not a step.
+        -> CHECK THE BR MODULE'S FRAME BOLTS AND TREAD.
+
+   THERE IS NO STEER COLUMN HERE, and there cannot be. The steer loop closes
+   on the CANcoder, so a misaligned one leaves no trace in the module state -
+   0.000194 at 1 deg, which aliases onto the RADIUS column as a cos(delta)
+   speed deficit, not onto a steer column. An earlier version of this sample
+   printed "BR +1.41 deg ... signature is steer-dominant" and that number was
+   impossible. See docs/evidence/swerve_residual_physical.py.
 
 COURSE ERROR
    delta - psi        baseline -0.21 deg    now -1.58 deg    ** CHANGED **
@@ -592,10 +599,14 @@ The reframe moves most of the work forward. Nothing here is blocked on the layou
 uncertainty that blocked the previous draft, because drift detection does not
 need an accurate layout.
 
-1. **The per-module residual analyzer.** Buildable and testable **now**, with no
-   Pi, no robot and no tags — ground truth is WPILib's own kinematics, and the
-   observability is already demonstrated in
-   `docs/evidence/swerve_residual_observability.py`. This is the core product.
+1. **The per-module residual analyzer.** Testable with no Pi, no robot and no
+   tags against WPILib's own kinematics — but note that this validates the
+   *software*, not the hardware's behaviour, and it covers only **wheel radius
+   and module mounting position**. The correct evidence is
+   `docs/evidence/swerve_residual_physical.py`; the earlier
+   `swerve_residual_observability.py` is SUPERSEDED and its headline number is
+   wrong. **This is no longer "the core product"** — that claim rested on
+   detecting CANcoder misalignment, which it cannot do.
 2. **Baseline / re-check schema and the diff report.** Versioned JSON, condition
    logging, content hashes, the repeatability threshold. Pure Python.
 3. **The static routine**, standalone against wall tags. No robot, no enable.
@@ -643,7 +654,11 @@ checking and null-direction probing, which is what it is good for.
 - **How much ordinary driving is enough** for a per-module residual estimate to
   beat its own noise floor. Unknown until measured; it sets whether this is a
   per-session or per-week report.
-- **Absolute calibration is not cancelled, only deferred.** If a team never had a
-  good baseline, drift detection tells them nothing useful. The absolute version
-  of this document is in git history and its degeneracy analysis still holds.
+- **The precondition may disqualify the motivating case.** This document requires
+  a good baseline to measure departure from — and the team that motivated it
+  (bowed board, CANcoder zeroed by eye, radius to the nearest quarter inch,
+  "accepted as good enough") is precisely a team that never had one. Drift
+  detection tells them nothing. What they needed was a good *first* measurement,
+  which this document explicitly declines to provide. This is unresolved and it
+  may be fatal.
 - Re-check photonlibpy's timestamp path against the deployed version.
