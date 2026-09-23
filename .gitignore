@@ -4,3 +4,6 @@ __pycache__/
 viz/.layout_cache.json
 viz/.rig_extrinsic.json
 *.jsonl
+
+# rig-specific state, not source
+baselines/*.json
