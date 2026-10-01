@@ -47,6 +47,108 @@ ntcore, photonlibpy, or ssh.
 
 ---
 
+## 0b. Installing with no internet (a private network, or an event)
+
+The commands above need the internet. A team network usually has none, and a
+competition field certainly has none. **Build the bundle at home, carry it in.**
+
+### One thing you must do while you still have internet
+
+**Install `pip3` on the Pi.** The PhotonVision image does not ship it, and
+bootstrapping pip itself offline on Debian is genuinely awkward. Do this once,
+at home, and the bundle below covers everything afterwards:
+
+```
+sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pip
+```
+
+### Build the bundle, on a machine with internet
+
+This works from a Mac or any machine — you are downloading *for* the Pi, not
+installing. **The platform tags are the part that wastes an evening.** The
+robotpy wheels are tagged for newer glibc than `manylinux2014`
+(`manylinux_2_35_aarch64` for `pyntcore` and `wpilib`, `manylinux_2_34_aarch64`
+for the `robotpy-native-*` packages), so a plain `--platform
+manylinux2014_aarch64` silently matches nothing. Pass all three:
+
+```sh
+mkdir photontune-offline && cd photontune-offline
+
+pip3 download --only-binary=:all: --python-version 311 \
+  --platform manylinux_2_35_aarch64 \
+  --platform manylinux_2_34_aarch64 \
+  --platform manylinux2014_aarch64 \
+  -d . msgpack websockets pyntcore wpilib robotpy-apriltag
+
+pip3 download --only-binary=:all: --python-version 311 \
+  --platform manylinux_2_35_aarch64 \
+  --platform manylinux_2_34_aarch64 \
+  --platform manylinux2014_aarch64 \
+  --no-deps -d . photonlibpy
+```
+
+**18 wheels, about 20 MB.** Verified 2026-10-01 against PyPI for Python 3.11 /
+Debian 12 aarch64, which is what the PhotonVision image is.
+
+**Why `photonlibpy` needs `--no-deps`.** It declares
+`opencv-python; platform_machine != "roborio"`, and resolving the whole set
+together fails. photontune never touches OpenCV — the decode path imports
+`hal, native, ntcore, photonlibpy, robotpy_apriltag, wpilib, wpimath, wpinet,
+wpiutil` and no `cv2` at all, checked by importing it and listing the modules.
+So skip it. If you later want OpenCV on the Pi for something else, it does have
+aarch64 wheels (`cp37-abi3-manylinux2014_aarch64`); fetch it separately.
+
+### Install it on the Pi
+
+```sh
+scp -r photontune-offline photonvision:/tmp/
+ssh photonvision
+  sudo pip3 install --break-system-packages --no-index \
+      --find-links /tmp/photontune-offline \
+      msgpack websockets pyntcore wpilib robotpy-apriltag
+  sudo pip3 install --break-system-packages --no-index --no-deps \
+      --find-links /tmp/photontune-offline photonlibpy
+```
+
+`--no-index` is what matters: without it pip will try to reach PyPI, hang on the
+timeout, and fail with a network error instead of using the files in front of it.
+
+Confirm:
+
+```sh
+python3 -c "import msgpack, websockets, ntcore, photonlibpy, numpy; print('ok')"
+```
+
+### If there is no pip3 at all and no way to get it
+
+A wheel is a zip file. Unpack them and point Python at the result:
+
+```sh
+mkdir -p /opt/pylibs && cd /opt/pylibs
+for w in /tmp/photontune-offline/*.whl; do unzip -oq "$w"; done
+PYTHONPATH=/opt/pylibs python3 /opt/photontune/photontune.py --host 127.0.0.1
+```
+
+Compiled extensions work this way too — they are just `.so` files inside the
+zip. Add `Environment=PYTHONPATH=/opt/pylibs` to the systemd unit to make it
+stick. This is a last resort, not the recommended path.
+
+### The laptop side needs almost nothing
+
+The calibration and measurement tools need only `msgpack`, `websockets` and
+`numpy`, and your laptop is the machine most likely to have internet anyway.
+If it does not:
+
+```sh
+pip3 download -d laptop-offline msgpack websockets numpy   # on a connected machine
+pip3 install --no-index --find-links laptop-offline msgpack websockets numpy
+```
+
+No `--platform` flags here, because you are installing on the same kind of
+machine you downloaded on.
+
+---
+
 ## 1. Get the cameras seen (CSI/MIPI only)
 
 **This is the step that eats an evening if you skip it.**
