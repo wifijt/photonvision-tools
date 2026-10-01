@@ -62,14 +62,37 @@ at home, and the bundle below covers everything afterwards:
 sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pip
 ```
 
+### Pick a tier first — photontune needs far less than everything
+
+photontune degrades deliberately, so you may not need the big bundle at all.
+Measured 2026-10-01 for Python 3.11 / aarch64:
+
+| tier | gets you | packages | size |
+|---|---|---|---|
+| **1** | the CLI — `photontune.py --host ...`, a real tune | `msgpack websockets` | **2 wheels, 680 KB** |
+| **2** | **+ daemon mode**, the `PhotonTune` NT table, dashboard trigger | `+ pyntcore` | **8 wheels, 6.4 MB** |
+| **3** | + detections read over NT instead of the websocket | `+ wpilib robotpy-apriltag photonlibpy` | **18 wheels, 20 MB** |
+
+**Tier 2 is what the systemd unit needs**, because it runs `--daemon`. Tier 1
+alone still gives you a working tuner you can run by hand over ssh.
+
+**Tier 3 buys speed, nothing else.** Without `photonlibpy` photontune logs
+`photonlibpy not available - sampling will use the websocket` and carries on at
+~9 results/s instead of ~43. Every trial is then built on 4.8x fewer frames, so
+the answers are noisier, not wrong. If 14 MB of carry weight is awkward, skip
+it and accept a slower, less certain tune.
+
 ### Build the bundle, on a machine with internet
 
 This works from a Mac or any machine — you are downloading *for* the Pi, not
 installing. **The platform tags are the part that wastes an evening.** The
-robotpy wheels are tagged for newer glibc than `manylinux2014`
+robotpy wheels are built for newer glibc than `manylinux2014`
 (`manylinux_2_35_aarch64` for `pyntcore` and `wpilib`, `manylinux_2_34_aarch64`
 for the `robotpy-native-*` packages), so a plain `--platform
-manylinux2014_aarch64` silently matches nothing. Pass all three:
+manylinux2014_aarch64` silently matches nothing and pip only tells you no
+distribution was found. Pass all three.
+
+Tier 1 or 2 — one command, no special cases:
 
 ```sh
 mkdir photontune-offline && cd photontune-offline
@@ -78,7 +101,17 @@ pip3 download --only-binary=:all: --python-version 311 \
   --platform manylinux_2_35_aarch64 \
   --platform manylinux_2_34_aarch64 \
   --platform manylinux2014_aarch64 \
-  -d . msgpack websockets pyntcore wpilib robotpy-apriltag
+  -d . msgpack websockets pyntcore          # drop pyntcore for tier 1
+```
+
+Tier 3 adds a second command, because `photonlibpy` has to be taken on its own:
+
+```sh
+pip3 download --only-binary=:all: --python-version 311 \
+  --platform manylinux_2_35_aarch64 \
+  --platform manylinux_2_34_aarch64 \
+  --platform manylinux2014_aarch64 \
+  -d . wpilib robotpy-apriltag
 
 pip3 download --only-binary=:all: --python-version 311 \
   --platform manylinux_2_35_aarch64 \
@@ -87,25 +120,26 @@ pip3 download --only-binary=:all: --python-version 311 \
   --no-deps -d . photonlibpy
 ```
 
-**18 wheels, about 20 MB.** Verified 2026-10-01 against PyPI for Python 3.11 /
-Debian 12 aarch64, which is what the PhotonVision image is.
-
 **Why `photonlibpy` needs `--no-deps`.** It declares
 `opencv-python; platform_machine != "roborio"`, and resolving the whole set
-together fails. photontune never touches OpenCV — the decode path imports
-`hal, native, ntcore, photonlibpy, robotpy_apriltag, wpilib, wpimath, wpinet,
-wpiutil` and no `cv2` at all, checked by importing it and listing the modules.
-So skip it. If you later want OpenCV on the Pi for something else, it does have
-aarch64 wheels (`cp37-abi3-manylinux2014_aarch64`); fetch it separately.
+together fails outright. photontune never touches OpenCV — the decode path
+imports `hal, native, ntcore, photonlibpy, robotpy_apriltag, wpilib, wpimath,
+wpinet, wpiutil` and no `cv2` at all, checked by importing it and listing what
+came in. So skip it. OpenCV does have aarch64 wheels
+(`cp37-abi3-manylinux2014_aarch64`) if you want it for something else later.
 
 ### Install it on the Pi
 
 ```sh
 scp -r photontune-offline photonvision:/tmp/
 ssh photonvision
+  # tier 1 or 2 - name only what you downloaded
   sudo pip3 install --break-system-packages --no-index \
-      --find-links /tmp/photontune-offline \
-      msgpack websockets pyntcore wpilib robotpy-apriltag
+      --find-links /tmp/photontune-offline msgpack websockets pyntcore
+
+  # tier 3 only
+  sudo pip3 install --break-system-packages --no-index \
+      --find-links /tmp/photontune-offline wpilib robotpy-apriltag
   sudo pip3 install --break-system-packages --no-index --no-deps \
       --find-links /tmp/photontune-offline photonlibpy
 ```
