@@ -1,13 +1,65 @@
 # photonvision-tools
 
-Scripts for surveying a custom AprilTag layout for [PhotonVision](https://photonvision.org),
-and for editing PhotonVision's configuration from the command line.
+Tools for setting up [PhotonVision](https://photonvision.org) on an FRC robot:
+measuring where your AprilTags are, measuring where your cameras are, calibrating
+cameras, and checking that it all still works.
 
-Companion to [photontune](https://github.com/wifijt/photontune).
+Companion to [photontune](https://github.com/wifijt/photontune), which sets
+exposure and gain.
+
+## Start here
+
+**Doing this tonight? → [QUICKSTART.md](QUICKSTART.md).** Numbered steps, in
+order, no explanations.
+
+```sh
+pip install -r requirements.txt -r requirements-survey.txt
+```
+
+No internet, or a Windows laptop? → [SETUP.md](SETUP.md).
+
+## What each folder does
+
+| folder | what it is for |
+|---|---|
+| `calib/` | **Calibrate a camera.** Do this first — a camera with no calibration for the resolution it is running publishes *nothing*, which looks exactly like a dead camera. Also measures your vision standard deviations instead of guessing them. |
+| `survey/` | **Build a field layout from tags you can see.** For a practice field, or tags on a wall. Produces an `AprilTagFieldLayout` you upload to PhotonVision. |
+| `mount/` | **Find where the cameras are on the robot**, by spinning it, instead of with a tape measure. This is `robotToCamera`. |
+| `monitor/` | **Notice when a camera has moved.** Two cameras check each other; needs no field and no robot. |
+| `setup/` | Get CSI/MIPI cameras recognised at all. USB cameras need none of this. |
+| `config/` | Change PhotonVision settings from a script instead of clicking. |
+| `viz/` | Watch the robot's position on a field, live. |
+| `thermal/` | Does the case overheat? |
+| `dashboards/` | A ready-made [Elastic](dashboards/) layout for photontune. |
+
+## The four things that waste an evening
+
+1. **Use the Pi's IP address**, not `photonvision.local`. mDNS usually fails on a
+   team network. `hostname -I` on the Pi.
+2. **Calibrate at the resolution you will actually run.** See above — it fails
+   silently and completely.
+3. **`survey/` and `mount/` need PhotonVision's NetworkTables server ON** when
+   there is no roboRIO. They are NT *clients*; without a server they report *no
+   data* rather than an error. `config/set_nt_server.py true`, then restart
+   PhotonVision. Turn it **off** before the Pi meets a roboRIO.
+4. **Measure a printed tag with a ruler** before surveying. `tag_size` is the
+   only thing that sets your field's scale, and a 1% printing error is a 1%
+   error in every distance, undetectable afterwards.
+
+## Known problems
+
+[photontune's DEFECTS.md](https://github.com/wifijt/photontune/blob/main/DEFECTS.md)
+lists what is known to be wrong across both repos, the conditions each appears
+under, and the workaround.
+
+---
+
+Everything below is the detail: what was measured, what it cost, and what did
+not work. It is reference material, not instructions — the instructions are in
+QUICKSTART.md.
 
 Everything here was written and validated against a real Raspberry Pi 5 running
-PhotonVision v2026.3.4 with an OV9281 CSI camera. The notes below record what actually
-worked — and, just as usefully, what didn't.
+PhotonVision v2026.3.4 with OV9281 cameras.
 
 ---
 
