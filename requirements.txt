@@ -1,0 +1,19 @@
+# photonvision-tools - BASE. Enough for most of the repo.
+#
+# Covers everything that talks to PhotonVision over its websocket:
+#   calib/calib_view.py          calib/charuco_capture.py
+#   calib/vision_stddev.py       config/apply_baseline.py
+#   config/set_pipeline_setting.py  setup/csi_cameras.py
+#   thermal/heat_test.py
+#
+#   pip install -r requirements.txt
+#
+# For the FIELD SURVEY and the MOUNT measurement, also install
+# requirements-survey.txt - those need NetworkTables, OpenCV and SciPy.
+# See the table in README.md for which tool needs what.
+msgpack
+websockets
+
+# monitor/camera_drift.py and survey/measure_quality.py additionally need this,
+# and it is small enough not to be worth a third file.
+numpy

@@ -1,13 +1,65 @@
 # photonvision-tools
 
-Scripts for surveying a custom AprilTag layout for [PhotonVision](https://photonvision.org),
-and for editing PhotonVision's configuration from the command line.
+Tools for setting up [PhotonVision](https://photonvision.org) on an FRC robot:
+measuring where your AprilTags are, measuring where your cameras are, calibrating
+cameras, and checking that it all still works.
 
-Companion to [photontune](https://github.com/wifijt/photontune).
+Companion to [photontune](https://github.com/wifijt/photontune), which sets
+exposure and gain.
+
+## Start here
+
+**Doing this tonight? → [QUICKSTART.md](QUICKSTART.md).** Numbered steps, in
+order, no explanations.
+
+```sh
+pip install -r requirements.txt -r requirements-survey.txt
+```
+
+No internet, or a Windows laptop? → [SETUP.md](SETUP.md).
+
+## What each folder does
+
+| folder | what it is for |
+|---|---|
+| `calib/` | **Calibrate a camera.** Do this first — a camera with no calibration for the resolution it is running publishes *nothing*, which looks exactly like a dead camera. Also measures your vision standard deviations instead of guessing them. |
+| `survey/` | **Build a field layout from tags you can see.** For a practice field, or tags on a wall. Produces an `AprilTagFieldLayout` you upload to PhotonVision. |
+| `mount/` | **Find where the cameras are on the robot**, by spinning it, instead of with a tape measure. This is `robotToCamera`. |
+| `monitor/` | **Notice when a camera has moved.** Two cameras check each other; needs no field and no robot. |
+| `setup/` | Get CSI/MIPI cameras recognised at all. USB cameras need none of this. |
+| `config/` | Change PhotonVision settings from a script instead of clicking. |
+| `viz/` | Watch the robot's position on a field, live. |
+| `thermal/` | Does the case overheat? |
+| `dashboards/` | A ready-made [Elastic](dashboards/) layout for photontune. |
+
+## The four things that waste an evening
+
+1. **Use the Pi's IP address**, not `photonvision.local`. mDNS usually fails on a
+   team network. `hostname -I` on the Pi.
+2. **Calibrate at the resolution you will actually run.** See above — it fails
+   silently and completely.
+3. **`survey/` and `mount/` need PhotonVision's NetworkTables server ON** when
+   there is no roboRIO. They are NT *clients*; without a server they report *no
+   data* rather than an error. `config/set_nt_server.py true`, then restart
+   PhotonVision. Turn it **off** before the Pi meets a roboRIO.
+4. **Measure a printed tag with a ruler** before surveying. `tag_size` is the
+   only thing that sets your field's scale, and a 1% printing error is a 1%
+   error in every distance, undetectable afterwards.
+
+## Known problems
+
+[photontune's DEFECTS.md](https://github.com/wifijt/photontune/blob/main/DEFECTS.md)
+lists what is known to be wrong across both repos, the conditions each appears
+under, and the workaround.
+
+---
+
+Everything below is the detail: what was measured, what it cost, and what did
+not work. It is reference material, not instructions — the instructions are in
+QUICKSTART.md.
 
 Everything here was written and validated against a real Raspberry Pi 5 running
-PhotonVision v2026.3.4 with an OV9281 CSI camera. The notes below record what actually
-worked — and, just as usefully, what didn't.
+PhotonVision v2026.3.4 with OV9281 cameras.
 
 ---
 
@@ -144,6 +196,18 @@ ws.send(msgpack.packb({"changePipelineSetting":
 
 Note the `cameraSettings` broadcast lags by a second or two, so reading a value straight
 back can show the old one even though the change applied.
+
+Two things about this message that are easy to get wrong. PhotonVision does **not**
+validate the keys: a misspelled or unknown setting name is accepted silently, with no
+error and no effect — so a typo looks exactly like a setting that did not stick. And a
+bad key does not invalidate the rest of the message. Verify by reading the value back,
+never by assuming the send succeeded. (An earlier version of these notes claimed a
+wrongly-typed field voided the whole payload. That was wrong; testing showed even a
+bogus key is accepted.)
+
+Enums are asymmetric: you **send** the name and **read back** an int. Sending
+`"DEG_0"` and comparing the readback to `"DEG_0"` never matches, because PhotonVision
+reports `0`. Compare against both.
 
 ### set_streams.py — a third of your framerate goes to a stream nobody watches
 
@@ -315,10 +379,119 @@ always for the unrotated sensor image.
 
 ## Requirements
 
+Two files, because most of the repo needs only two small packages and the field
+survey needs OpenCV, SciPy and the robotpy stack.
+
 ```sh
-pip install msgpack websockets numpy scipy opencv-python-headless pyntcore photonlibpy
+pip install -r requirements.txt                               # most tools
+pip install -r requirements.txt -r requirements-survey.txt    # + survey, mount, viz
 ```
+
+| tool | needs | talks to PhotonVision over |
+|---|---|---|
+| `calib/calib_view.py` | base | websocket |
+| `calib/charuco_capture.py` | base | websocket |
+| `calib/vision_stddev.py` | base | websocket |
+| `config/apply_baseline.py` | base | websocket |
+| `config/set_pipeline_setting.py` | base | websocket |
+| `setup/csi_cameras.py` | base | websocket |
+| `thermal/heat_test.py` | base | websocket |
+| `monitor/camera_drift.py` | base (uses numpy) | websocket |
+| `survey/measure_quality.py` | base (uses numpy) | websocket |
+| `config/set_streams.py` | base + `pyntcore` | websocket + NT |
+| `survey/capture_corners.py` | **+ survey** | **NetworkTables** |
+| `mount/calibrate_mount.py` | **+ survey** | **NetworkTables** |
+| `survey/solve_layout.py` | **+ survey** | offline (reads a file) |
+| `viz/field_viewer.py` | **+ survey** | **NetworkTables** |
+| `config/set_nt_server.py` | none | runs ON the Pi, edits SQLite |
+| `config/rename_pipeline.py`, `set_active_pipeline.py` | none | - |
+| `viz/analyze_rig_log.py` | none | offline (reads a file) |
+
+### The NetworkTables precondition, which is not a dependency
+
+`capture_corners.py`, `calibrate_mount.py` and `field_viewer.py` are NT
+**clients**, and `--host` is the NT **SERVER**, not "the camera".
+
+- **On a bench, with no roboRIO:** PhotonVision's own NT server has to be ON, or
+  these three connect to nothing and simply report no data.
+  `config/set_nt_server.py true`, run **on the Pi**, then restart PhotonVision -
+  it reads that config at startup. It edits the SQLite directly rather than
+  POSTing `/api/settings/general`, which resets the network interface.
+- **On a robot:** `--host` is the **roboRIO**, and PhotonVision's NT server must
+  be OFF. Two servers on one network fight.
+
+### Offline, or on a Windows team laptop
+
+See [SETUP.md](SETUP.md) - the platform tags are the part that wastes an
+evening, and `pip download` on Windows silently gives you Windows wheels.
 
 ## License
 
 GPLv3. See [LICENSE](LICENSE).
+
+## viz/ — where is the rig, right now
+
+`field_viewer.py` serves a live top-down field plan on your own machine. It reads
+PhotonVision over NetworkTables, works out where each camera is, and draws it.
+
+    python3 viz/field_viewer.py --host photonvision.local
+    open http://localhost:8077
+
+It needs no configuration and no layout file. The tag layout is **reconstructed from
+the live stream** — every multi-tag frame gives a camera pose plus a set of
+camera-to-tag transforms, and composing them puts each tag in the field frame. The
+picture therefore always shows the layout PhotonVision is actually running, not a copy
+that has drifted. Tags are cached between runs; the cache **merges**, because a camera
+that cannot currently see a tag is not evidence the tag is gone.
+
+### The fused rig pose
+
+Two cameras bolted to one plate do not get to disagree about where they are. The
+viewer learns the fixed camera-to-camera transform while both have a good multi-tag
+fix and the rig is stationary, then pins both cameras to their seats on the rig and
+solves **one** pose.
+
+That is better than averaging two independent poses. A camera looking at tags in poor
+geometry has a pose that slides along its viewing axis; pinned to the rig, the other
+camera — looking from a completely different angle — constrains exactly the direction
+the first one is weak in. Measured on a 82 deg splayed pair sharing **no tags at all**,
+the two cameras agreed on the rig origin to 0.89 mm and 0.03 deg.
+
+Weighting is inverse-variance, with
+
+    sigma = 0.008 * d^2 / n_tags * (1 + max(0, reproj - 0.6))
+
+`d^2/n` is the usual WPILib shape; reprojection error is folded in because it is the
+one number reporting how well the tags agreed with each other on *this* frame.
+
+Three things learned the hard way, all preserved in the code:
+
+  - A seat is the rig origin expressed in the camera's frame, so the rig's field pose
+    is `M_camera @ seat`, **not** `M_camera @ inv(seat)`. Getting it backwards rotates
+    each camera's answer the opposite way and shows up as the cameras disagreeing by
+    twice the mount angle — 161 deg on an 82 deg mount.
+  - Learn the mount only while the rig is **still**. The cameras publish
+    independently, so timing skew turns rig motion straight into apparent mount error:
+    at 0.5 m/s, 20 ms of skew is 10 mm of fiction.
+  - Down-weight a single-tag fix; do not drop it. Dropping makes the answer switch
+    between one-camera and two-camera solutions, and that switch is itself a step —
+    measured, hard dropping turned 0.4% of samples into 44%, with excursions to 2.7 m.
+
+### Reading the logs
+
+`--log FILE` writes one JSON object per fused pose. `analyze_rig_log.py` finds the
+jitter in it and says what caused it:
+
+    python3 viz/analyze_rig_log.py rig.jsonl
+
+It scores each sample by how far it sits from where its neighbours say it should be,
+`|p[i] - (p[i-1]+p[i+1])/2|`, which is zero for any constant-velocity motion. A plain
+step between consecutive samples cannot tell jitter from movement — carrying the rig at
+1.6 m/s produces 165 mm steps at 10 Hz and every one of them is real.
+
+**The number to watch is the camera-to-camera disagreement.** Both cameras compute the
+same rig pose independently, so their difference is a direct read on whether the mount
+transform and the tag layout are right; it should sit at a millimetre or two. If
+re-learning the mount makes a large disagreement vanish, that is not a fix — a mount
+that changes with rig position is absorbing error in the tag layout, and the estimator
+will look excellent at any one spot while being wrong everywhere else.

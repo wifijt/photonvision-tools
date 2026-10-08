@@ -1,0 +1,146 @@
+{
+  "version": 1.0,
+  "grid_size": 16,
+  "tabs": [
+    {
+      "name": "PhotonTune",
+      "grid_layout": {
+        "layouts": [],
+        "containers": [
+          {
+            "title": "START A TUNE",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 256.0,
+            "height": 128.0,
+            "type": "Toggle Switch",
+            "properties": {
+              "topic": "/PhotonTune/run",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "OK?",
+            "x": 256.0,
+            "y": 0.0,
+            "width": 128.0,
+            "height": 128.0,
+            "type": "Boolean Box",
+            "properties": {
+              "topic": "/PhotonTune/ok",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Busy",
+            "x": 384.0,
+            "y": 0.0,
+            "width": 128.0,
+            "height": 128.0,
+            "type": "Boolean Box",
+            "properties": {
+              "topic": "/PhotonTune/busy",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Heartbeat",
+            "x": 512.0,
+            "y": 0.0,
+            "width": 256.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/heartbeat",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Progress",
+            "x": 0.0,
+            "y": 128.0,
+            "width": 384.0,
+            "height": 128.0,
+            "type": "Number Bar",
+            "properties": {
+              "topic": "/PhotonTune/progress",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Camera",
+            "x": 384.0,
+            "y": 128.0,
+            "width": 384.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/camera",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Status",
+            "x": 0.0,
+            "y": 256.0,
+            "width": 768.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/status",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Summary",
+            "x": 0.0,
+            "y": 384.0,
+            "width": 768.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/summary",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Warnings",
+            "x": 0.0,
+            "y": 512.0,
+            "width": 768.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/warnings",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Boot baseline OK",
+            "x": 0.0,
+            "y": 640.0,
+            "width": 128.0,
+            "height": 128.0,
+            "type": "Boolean Box",
+            "properties": {
+              "topic": "/PhotonTune/bootBaselineOk",
+              "period": 0.06
+            }
+          },
+          {
+            "title": "Boot baseline",
+            "x": 128.0,
+            "y": 640.0,
+            "width": 640.0,
+            "height": 128.0,
+            "type": "Text Display",
+            "properties": {
+              "topic": "/PhotonTune/bootBaselineSummary",
+              "period": 0.06
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+# photonvision-tools - FIELD SURVEY and MOUNT measurement.
+#
+# Install ON TOP of requirements.txt:
+#   pip install -r requirements.txt -r requirements-survey.txt
+#
+# Needed by:
+#   survey/capture_corners.py    reads PhotonVision's corners over NetworkTables
+#   survey/solve_layout.py       bundle-adjusts them into an AprilTagFieldLayout
+#   survey/photon_calib.py
+#   mount/calibrate_mount.py     where the cameras are, from a spin
+#   viz/field_viewer.py          live field view
+#
+# NOTE - a precondition, not a dependency: capture_corners.py and
+# calibrate_mount.py are NetworkTables CLIENTS and connect to --host as an NT
+# SERVER. On a bench with no roboRIO, PhotonVision's own NT server must be ON
+# (config/set_nt_server.py). On a robot, --host is the ROBORIO, not the camera.
+scipy
+opencv-python-headless
+pyntcore
+photonlibpy
