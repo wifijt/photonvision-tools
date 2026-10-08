@@ -327,9 +327,51 @@ always for the unrotated sensor image.
 
 ## Requirements
 
+Two files, because most of the repo needs only two small packages and the field
+survey needs OpenCV, SciPy and the robotpy stack.
+
 ```sh
-pip install msgpack websockets numpy scipy opencv-python-headless pyntcore photonlibpy
+pip install -r requirements.txt                               # most tools
+pip install -r requirements.txt -r requirements-survey.txt    # + survey, mount, viz
 ```
+
+| tool | needs | talks to PhotonVision over |
+|---|---|---|
+| `calib/calib_view.py` | base | websocket |
+| `calib/charuco_capture.py` | base | websocket |
+| `calib/vision_stddev.py` | base | websocket |
+| `config/apply_baseline.py` | base | websocket |
+| `config/set_pipeline_setting.py` | base | websocket |
+| `setup/csi_cameras.py` | base | websocket |
+| `thermal/heat_test.py` | base | websocket |
+| `monitor/camera_drift.py` | base (uses numpy) | websocket |
+| `survey/measure_quality.py` | base (uses numpy) | websocket |
+| `config/set_streams.py` | base + `pyntcore` | websocket + NT |
+| `survey/capture_corners.py` | **+ survey** | **NetworkTables** |
+| `mount/calibrate_mount.py` | **+ survey** | **NetworkTables** |
+| `survey/solve_layout.py` | **+ survey** | offline (reads a file) |
+| `viz/field_viewer.py` | **+ survey** | **NetworkTables** |
+| `config/set_nt_server.py` | none | runs ON the Pi, edits SQLite |
+| `config/rename_pipeline.py`, `set_active_pipeline.py` | none | - |
+| `viz/analyze_rig_log.py` | none | offline (reads a file) |
+
+### The NetworkTables precondition, which is not a dependency
+
+`capture_corners.py`, `calibrate_mount.py` and `field_viewer.py` are NT
+**clients**, and `--host` is the NT **SERVER**, not "the camera".
+
+- **On a bench, with no roboRIO:** PhotonVision's own NT server has to be ON, or
+  these three connect to nothing and simply report no data.
+  `config/set_nt_server.py true`, run **on the Pi**, then restart PhotonVision -
+  it reads that config at startup. It edits the SQLite directly rather than
+  POSTing `/api/settings/general`, which resets the network interface.
+- **On a robot:** `--host` is the **roboRIO**, and PhotonVision's NT server must
+  be OFF. Two servers on one network fight.
+
+### Offline, or on a Windows team laptop
+
+See [SETUP.md](SETUP.md) - the platform tags are the part that wastes an
+evening, and `pip download` on Windows silently gives you Windows wheels.
 
 ## License
 
