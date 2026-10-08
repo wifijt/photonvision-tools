@@ -17,6 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _ap=argparse.ArgumentParser(
     description="Bundle-adjust recorded corners into an AprilTagFieldLayout.")
 _ap.add_argument("frames", help="json from capture_corners.py")
+_ap.add_argument("--max-frames", type=int, default=250,
+                 help="subsample to this many frames before solving (default 250). "
+                      "More is slower without being more accurate.")
 _ap.add_argument("out", help="output AprilTagFieldLayout json")
 _ap.add_argument("tag_size", nargs="?", type=float, default=0.1651,
                  help="black-square edge in metres (default 0.1651 = 6.5in)")
@@ -25,7 +28,7 @@ _ap.add_argument("--host", default="photonvision.local",
 _ap.add_argument("--fx", type=float); _ap.add_argument("--fy", type=float)
 _ap.add_argument("--cx", type=float); _ap.add_argument("--cy", type=float)
 _a=_ap.parse_args()
-FR=_a.frames; OUT=_a.out; TAG=_a.tag_size
+FR=_a.frames; OUT=_a.out; TAG=_a.tag_size; MAXF=_a.max_frames
 if _a.fx and _a.fy and _a.cx and _a.cy:
     K=np.array([[_a.fx,0,_a.cx],[0,_a.fy,_a.cy],[0,0,1]]); D=np.zeros(8)
     print("using intrinsics from the command line (no distortion model)")
@@ -44,8 +47,55 @@ def rt2T(r,t):
 def T2rt(T): return cv2.Rodrigues(T[:3,:3])[0].flatten(),T[:3,3]
 frames=json.load(open(FR))
 tags=sorted({int(t) for f in frames for t in f['ids']})
-REF=tags[0]
-print('frames %d  tags %s  reference %d'%(len(frames),tags,REF))
+# Drop tags too sparsely seen to place, and anchor to the BEST-observed tag.
+# REF used to be tags[0] - the lowest ID - so a single spurious detection of a
+# low-numbered tag anchored the whole layout to something seen twice, and the
+# solve started at an RMS of 2759 px. The reference defines the frame everything
+# else is measured against; it has to be the tag you have the most evidence for.
+from collections import Counter as _C
+_counts = _C(int(t) for f in frames for t in f['ids'])
+MIN_OBS = 20
+_sparse = sorted(t for t in tags if _counts[t] < MIN_OBS)
+if _sparse:
+    print('dropping tags seen fewer than %d times: %s'
+          % (MIN_OBS, {t: _counts[t] for t in _sparse}))
+    keep = {t for t in tags if _counts[t] >= MIN_OBS}
+    trimmed = []
+    for f in frames:
+        ids = [t for t in f['ids'] if int(t) in keep]
+        if len(ids) >= 2:
+            trimmed.append({'ids': ids,
+                            'corners': {k: v for k, v in f['corners'].items()
+                                        if int(k) in keep}})
+    frames = trimmed
+    tags = sorted(keep)
+    print('  %d frames remain' % len(frames))
+# Subsample. A bundle adjustment over 900 frames is ~5500 parameters against
+# ~17800 residuals and grinds for a very long time for no extra accuracy - the
+# original successful survey captured 1754 frames and solved ~210. Pick frames
+# that BALANCE tag coverage rather than the first N, so a tag seen rarely is not
+# crowded out by one seen constantly.
+if len(frames) > MAXF:
+    import random as _r
+    _r.seed(0)
+    _pool = list(range(len(frames))); _r.shuffle(_pool)
+    _have = _C(); _chosen = []
+    while _pool and len(_chosen) < MAXF:
+        _target = min(tags, key=lambda t: _have[t])
+        _pick = 0
+        for _i, _fi in enumerate(_pool):
+            if _target in [int(t) for t in frames[_fi]['ids']]:
+                _pick = _i; break
+        _fi = _pool.pop(_pick); _chosen.append(_fi)
+        for _t in frames[_fi]['ids']: _have[int(_t)] += 1
+    frames = [frames[i] for i in sorted(_chosen)]
+    print('subsampled to %d frames, per-tag %s'
+          % (len(frames), dict(sorted(_have.items()))))
+    _counts = _C(int(t) for f in frames for t in f['ids'])
+
+REF = max(tags, key=lambda t: _counts[t])
+print('frames %d  tags %s  reference %d (%d observations)'
+      % (len(frames), tags, REF, _counts[REF]))
 pnp={}
 for fi,f in enumerate(frames):
     for t in f['ids']:
@@ -94,7 +144,10 @@ for k,(fi,t) in enumerate(obs):
     rows=slice(k*8,k*8+8)
     if t!=REF: i=opt.index(t); Js[rows,i*6:i*6+6]=1
     j=fidx[fi]; Js[rows,NT*6+j*6:NT*6+j*6+6]=1
-res=least_squares(resid,x0,jac_sparsity=Js,x_scale='jac',ftol=1e-10,method='trf')
+# verbose=2 so it is visible that it is working - with no output a long solve
+# is indistinguishable from a hang.
+res=least_squares(resid,x0,jac_sparsity=Js,x_scale='jac',ftol=1e-8,
+                  method='trf',verbose=2)
 print('final   RMS %.3f px'%np.sqrt((res.fun**2).mean()))
 tT,cT=unpack(res.x)
 for t in tags:
