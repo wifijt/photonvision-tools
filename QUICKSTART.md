@@ -9,6 +9,8 @@ fails on a team network — find it with `hostname -I` on the Pi).
 ## 0. Laptop setup, once
 
 ```sh
+git clone https://github.com/wifijt/photonvision-tools
+cd photonvision-tools
 pip install -r requirements.txt -r requirements-survey.txt
 ```
 
@@ -18,11 +20,22 @@ No internet? See [SETUP.md](SETUP.md), section 0b.
 
 ## 1. photontune onto the Pi
 
+Get the bundle (any machine with internet — Windows, Mac, Linux):
+
 ```sh
-scp -r photontune-offline-full photon@PI:/tmp/        # password: vision
+curl -LO https://github.com/wifijt/photontune/releases/latest/download/photontune-offline-full.tar.gz
+tar -xzf photontune-offline-full.tar.gz
+```
+
+Copy it over and run one command. Login is `photon` / `vision`:
+
+```sh
+scp -r photontune-offline-full photon@PI:/tmp/
 ssh photon@PI
 sudo bash /tmp/photontune-offline-full/install.sh
 ```
+
+Needs no network on the Pi and no pip there to begin with.
 
 Check it, no camera needed:
 
