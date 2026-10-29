@@ -171,7 +171,7 @@ the scale of your whole field. 1% wrong print = 1% wrong field, undetectable.
 On the laptop:
 
 ```sh
-python3 survey/photon_calib.py --host PI                    # sanity-check intrinsics
+python3 survey/photon_calib.py PI                    # sanity-check intrinsics
 python3 survey/capture_corners.py --host PI frames.json     # move the camera around
 python3 survey/solve_layout.py frames.json layout.json 0.1651   # <- YOUR measured size
 ```

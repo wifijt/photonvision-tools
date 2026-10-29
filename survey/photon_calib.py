@@ -61,8 +61,17 @@ def fetch_calibration(host, width=None, height=None, timeout=60):
 
 
 if __name__ == "__main__":
-    import sys
-    host = sys.argv[1] if len(sys.argv) > 1 else "photonvision.local"
+    import argparse
+    # Accept BOTH forms. Every other tool in this repo spells it --host, so a
+    # positional-only host here is a trap: `--host 10.0.0.1` resolved the
+    # literal hostname "--host" and failed with getaddrinfo, naming neither
+    # the flag nor the address.
+    ap = argparse.ArgumentParser(description="Fetch a camera's calibration from PhotonVision.")
+    ap.add_argument("host_pos", nargs="?", metavar="HOST", default=None,
+                    help="PhotonVision address; --host HOST works too")
+    ap.add_argument("--host", default=None, help="same thing, for consistency with the other tools")
+    a = ap.parse_args()
+    host = a.host or a.host_pos or "photonvision.local"
     K, D, wh, nick, n = fetch_calibration(host)
     print("camera      : %s" % nick)
     print("resolution  : %dx%d  (%d calibration snapshots)" % (wh[0], wh[1], n))
