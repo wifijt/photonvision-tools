@@ -6,6 +6,73 @@ fails on a team network — find it with `hostname -I` on the Pi).
 
 ---
 
+## First: bench or robot? It changes three things
+
+Everything below assumes a **bench** — a Pi with no roboRIO. If the Pi is
+**mounted on the robot with the roboRIO powered and on the network**, read this
+box first, because getting it backwards makes the survey and mount tools report
+*no data* instead of an error. That looks like a camera or lighting fault for
+twenty minutes.
+
+| | bench, no roboRIO | on the robot, RIO powered |
+|---|---|---|
+| `runNTServer` | **true**, then restart PhotonVision | **false** — the RIO is the server; two fight |
+| `--host` for `capture_corners` / `calibrate_mount` | the **Pi** | the **roboRIO**, `10.TE.AM.2` |
+| photontune's unit | `--nt-server 127.0.0.1` | `--team <number>`, and **no** `--nt-server` |
+
+### On the robot, do these three things
+
+**1. Give the Pi its FRC address**, as a *secondary* so DHCP stays as your way
+back in:
+
+```sh
+nmcli -t -f NAME con show --active          # get the profile name
+sudo nmcli con mod <profile> +ipv4.addresses 10.TE.AM.12/8
+sudo nmcli device reapply eth0              # does not drop your ssh session
+ip -4 -brief addr show eth0                 # expect BOTH addresses
+```
+
+It survives PhotonVision's own network re-apply (that only touches
+`ipv4.method`), and it is stored in the profile, so it returns every boot with
+no DHCP needed. Only switch the dashboard to **Static** when the robot goes to
+competition — that drops DHCP entirely, which is right there and a liability
+anywhere else.
+
+⚠️ **Do not add this address to a Pi living on a 192.168.x network.** Avahi will
+advertise it, clients may pick it, and `photonvision.local` then points
+somewhere your laptop cannot route. The IP keeps working; the *name* stops.
+
+**2. Fix photontune's unit.** The shipped unit has `--nt-server 10.0.0.2`, and
+**`--nt-server` takes precedence over `--team`** — so it would hunt for a server
+at 10.0.0.2 and never find your RIO, and the dashboard trigger would silently do
+nothing. `--team` also defaults to **0**, so removing one without adding the
+other is equally broken. Edit `/etc/systemd/system/photontune.service`:
+
+```
+ExecStart=/usr/bin/python3 -u /opt/photontune/photontune.py \
+    --daemon \
+    --host 127.0.0.1 \
+    --team <your number> \
+    --nt-table PhotonTune \
+    --boot-timeout 90
+```
+
+`--nt-server` gone, `--team` present. Then:
+
+```sh
+sudo systemctl daemon-reload && sudo systemctl restart photontune
+sudo journalctl -u photontune -f
+```
+
+`--team` beats a hardcoded `10.TE.AM.2` because ntcore tries the whole standard
+FRC address set — roboRIO USB, mDNS, and the static address — instead of one
+guess.
+
+**3. Leave `runNTServer` false**, and skip the `set_nt_server.py` step in part 3
+below. Point those tools at the RIO instead.
+
+---
+
 ## 0. Laptop setup, once
 
 ```sh
@@ -87,8 +154,10 @@ python3 calib/charuco_capture.py --host PI --camera "NAME" \
 
 ## 3. New field layout
 
-⚠️ **Turn PhotonVision's NT server ON first, or steps 3 and 4 silently see no
-data** — they are NetworkTables *clients* and there is no roboRIO on a bench.
+⚠️ **On a bench, turn PhotonVision's NT server ON first, or steps 3 and 4
+silently see no data** — they are NetworkTables *clients* and there is no
+roboRIO. **On the robot, skip this and use the roboRIO as `--host`** — see the
+box at the top.
 
 ```sh
 ssh photon@PI
