@@ -83,6 +83,13 @@ import numpy as np
 
 PER_BIN = 12          # max samples per 2-degree slice of the arc
 
+# Radial residual that says the SPIN was bad, in mm. Absolute, not a fraction
+# of the radius: x/y are a difference from the fitted centre, so their error is
+# bounded by this residual however short the lever arm is. Measured on a
+# two-camera bench rig: 1.5-3 mm with a fixed axis, 13 mm with a hand pivot
+# that wandered. 5 mm sits between those.
+RESID_LIMIT_MM = 5.0
+
 # A gyro published as a bare number carries no units. These are the only two it
 # is ever in, and the spin tells us which: see _gyro_track.
 GYRO_UNITS = (("degrees", 180.0 / math.pi), ("radians", 1.0))
@@ -717,24 +724,59 @@ def solve(path, origin_height=None, forward_path=None):
         print("  robotToCamera can be emitted. Record one straight drive with")
         print("  `record`, then pass it as --forward.")
 
-    # A circle fit is only meaningful if the residual is small COMPARED TO THE
-    # RADIUS. Pivoting about a point close to the cameras gives a tiny arm that
-    # pose noise swamps - measured: a 28 mm radius with a 13 mm residual, which
-    # is not a measurement at all. Refuse rather than print a plausible number.
-    bad = [n for i, n in enumerate(names) if res_all[n].std() > 0.15 * r[i]]
+    # Gate on the ABSOLUTE residual, not on its ratio to the radius.
+    #
+    # This used to refuse whenever the residual passed 15% of the radius, on the
+    # reasoning that a short lever arm is swamped by pose noise. That reasoning
+    # is wrong, and synthetic truth says so: with cameras at 15 mm and 8 mm from
+    # the axis and 1.5 mm of pose noise, x and y came back within 0.2 mm and
+    # 0.1 mm of truth - and the old rule called them unusable at 10% and 18%.
+    #
+    # x and y are a DIFFERENCE between the camera and the fitted centre, so
+    # their error is bounded by the residual in millimetres no matter how short
+    # the arm is. The ratio blows up as the radius shrinks because the
+    # denominator vanishes, not because the answer got worse. The historical
+    # failure that motivated the old rule - a 28 mm radius with a 13 mm
+    # residual - was a WANDERING hand pivot, and 13 mm catches that on its own.
+    bad = [n for n in names if 1000 * res_all[n].std() > RESID_LIMIT_MM]
     worst = max(res_all.values(), key=lambda v: v.std())
     print("\nFIT QUALITY: worst per-camera radial residual %.1f mm sd" % (1000 * worst.std()))
+    print("  That is also the error bar on x and y, in mm. The percentages below")
+    print("  are information, not a pass mark - a camera ON the axis has a huge")
+    print("  percentage and a correct, near-zero x/y.")
     for i, n in enumerate(names):
-        print("   %-14s residual is %3.0f%% of the radius" % (n, 100 * res_all[n].std() / max(r[i], 1e-9)))
+        print("   %-14s %5.1f mm sd  =  %3.0f%% of a %.0f mm radius"
+              % (n, 1000 * res_all[n].std(),
+                 100 * res_all[n].std() / max(r[i], 1e-9), 1000 * r[i]))
     if bad:
-        print("\n*** THESE RADII ARE NOT USABLE: %s" % ", ".join(bad))
-        print("    The residual is more than 15% of the radius, which means the")
-        print("    pivot was too close to the cameras - the arm is smaller than the")
-        print("    pose noise. Move the pivot 200-400 mm AWAY from the lenses and")
-        print("    rotate again. (The yaw between cameras above is unaffected; it")
-        print("    does not come from the circle fit.)")
-    print("A residual much larger than your pose jitter means either the rig did not")
-    print("rotate about a FIXED axis, or one camera's calibration disagrees with the others.")
+        print("\n*** THE SPIN ITSELF IS BAD: %s" % ", ".join(bad))
+        print("    Over %.0f mm of radial residual. The rig did not rotate about a"
+              % RESID_LIMIT_MM)
+        print("    FIXED axis, or one camera's calibration disagrees with the")
+        print("    others. x and y inherit this directly, so re-spin about a")
+        print("    genuinely fixed point before using them. (Yaw, pitch, roll and")
+        print("    z are unaffected - none of them comes from the circle fit.)")
+    # A short arm does not spoil x/y and does not blind the residual check
+    # either - the residual is absolute, so a wandering axis still shows up
+    # (verified: a 10 mm wander gave 5.8 mm sd with the cameras 8-15 mm out).
+    # What a short arm really costs is the TAPE MEASURE cross-check, and it
+    # makes the bearing ill-determined - harmlessly, since the bearing only
+    # ever multiplies a radius that is itself nearly zero.
+    near = [n for i, n in enumerate(names)
+            if res_all[n].std() > 0.08 * max(r[i], 1e-9)]
+    if near and not bad:
+        print("\n  NOTE: %s sit(s) close to the rotation axis, hence the large"
+              % ", ".join(near))
+        print("    percentages above. That is not a problem:")
+        print("      - x and y are good to about %.1f mm, the residual. They are a"
+              % (1000 * worst.std()))
+        print("        difference from the centre and do not care about the arm.")
+        print("      - a wandering axis is still caught, because the %.0f mm limit is"
+              % RESID_LIMIT_MM)
+        print("        absolute and a wander shows up whatever the radius.")
+        print("    What you DO lose is the tape-measure cross-check - you cannot")
+        print("    usefully tape 10 mm from a pivot to a lens - so the spin/drive")
+        print("    yaw cross-check above is your only outside confirmation.")
 
 
 if __name__ == "__main__":

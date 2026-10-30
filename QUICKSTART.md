@@ -385,6 +385,7 @@ moves in — and it is **not** a measurement of the crab.
 | travel < 500 mm | **refuses** — pose noise swamps the direction fit |
 | cameras disagree > 2° on heading | warns — suspect one camera's calibration |
 | spin and drive disagree on yaw-apart | flags `<<< DISAGREES` |
+| radial residual > 5 mm | **refuses** — the spin axis wandered |
 
 That last one is the real check: the spin measures camera-to-camera yaw without
 ever seeing the drive, and the drive gives each yaw separately. Independent
@@ -400,7 +401,44 @@ robot frame only while the robot sits level.
 
 Sanity-check the reported radius against a tape from the pivot to the lens, and
 expect a few mm of entrance-pupil offset *inside* the barrel — the optical
-centre sits behind the glass.
+centre sits behind the glass. This check needs a real lever arm; see below.
+
+### If a camera sits near the middle of the robot
+
+This is the **easy** case for x/y, not the hard one, which is the opposite of
+what the tool used to say.
+
+x and y are a *difference* between the camera and the fitted rotation centre,
+so their error is bounded by the radial residual **in millimetres**, however
+short the lever arm is. Against synthetic truth with cameras 15 mm and 8 mm
+from the axis and 1.5 mm of pose noise, x and y came back within **0.2 mm and
+0.1 mm**. The old rule refused exactly that spin, because it gated on residual
+as a *percentage of radius* and the percentage blows up as the radius vanishes
+— 10% and 18% there. Worse, the same rule happily **passed** a spin whose axis
+wandered 10 mm, because at a 280 mm radius that is only 2–3%. Backwards in both
+directions. The gate is now 5 mm absolute.
+
+Nothing else degrades either:
+
+| quantity | where it comes from | hurt by a short arm? |
+|---|---|---|
+| `yaw` | camera yaw vs the drive's travel direction | no |
+| `pitch`, `roll` | gravity | no |
+| `z` | mean camera height | no |
+| `x`, `y` | camera minus fitted centre | no — error stays ~the residual |
+| axis-wander check | absolute residual | no — a 10 mm wander still read 5.8 mm at an 8 mm radius |
+| tape cross-check | you, with a tape | **yes** — you cannot usefully tape 10 mm to a lens |
+
+So the only real loss is your outside confirmation. With a near-centre camera
+the spin/drive yaw cross-check is the only independent evidence you get, so
+read it rather than skipping to the transform. The solve prints a `NOTE` naming
+the affected cameras so the large percentages do not look like a failure.
+
+**Do not move the pivot off the robot's centre to get a bigger arm.** The
+rotation centre of the in-place spin *is* the point `robotToCamera` must
+reference — WPILib's kinematics uses that same centre. An arc with a larger
+radius measures the cameras against the arc's centre, which is not the robot
+origin, and you would have gained precision in the wrong frame.
 
 ---
 
