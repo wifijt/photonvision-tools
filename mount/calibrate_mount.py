@@ -68,6 +68,7 @@ improves all of it: 360 deg of arc instead of 55-80, a genuinely fixed axis
 instead of your hand, and a larger radius.
 """
 import argparse
+import json
 import math
 import sys
 import time
@@ -130,7 +131,187 @@ def record(path, seconds, host, names):
         print("  %-14s %d solves" % (n, len(rows[n])))
 
 
-def solve(path, origin_height=None):
+def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt):
+    """Resolve 'robot forward' from one straight drive, then emit robotToCamera.
+
+    WHAT "FORWARD" MEANS HERE, stated plainly because it is a choice and not a
+    measurement: forward is THE DIRECTION THE ROBOT ACTUALLY TRAVELLED when
+    commanded straight. It is not the Pigeon's zero and it is not the chassis
+    centreline. If the steer offsets are a degree off, the robot crabs, and
+    that crab is baked into every robotToCamera this emits.
+
+    That is the right choice for vision: robotToCamera then lives in the same
+    frame the drivetrain actually moves in, so vision and odometry agree. It is
+    the wrong choice if you wanted to MEASURE the crab - for that you need an
+    independent heading, and the earlier audits showed a camera cannot supply
+    one (a closed loop hides the error in the sensor it closes on).
+    """
+    d = np.load(path, allow_pickle=True)
+    dnames = [str(x) for x in d["names"]]
+    drive = {n: d[n] for n in dnames if n in names and d[n].size}
+    missing = [n for n in names if n not in drive]
+    if missing:
+        print("\n!! --forward has no data for %s - cannot place %s"
+              % (", ".join(missing), ", ".join(missing)))
+    usable = [n for n in names if n in drive]
+    if not usable:
+        print("\n!! --forward recording has no cameras in common with the spin")
+        return
+
+    print("\n" + "=" * 68)
+    print("ROBOT FORWARD, from the straight drive")
+    print("=" * 68)
+
+    # --- each camera's path gives an INDEPENDENT estimate of the direction ---
+    # Every point on a rigid body translating without rotation moves along the
+    # same vector, so the cameras must agree. Disagreement means the robot
+    # turned, or a camera's pose stream is bad.
+    dirs, spans, straight = {}, {}, {}
+    for n in usable:
+        q = drive[n]
+        xy = q[:, 1:3]
+        c = xy - xy.mean(axis=0)
+        # Total least squares: the principal axis, not a y-on-x regression,
+        # because a drive running near the layout's y axis has an infinite slope.
+        _u, _s, vt = np.linalg.svd(c, full_matrices=False)
+        v = vt[0]
+        # 180 deg sign ambiguity: resolve by where it went, not where the line lies.
+        if np.dot(xy[-1] - xy[0], v) < 0:
+            v = -v
+        dirs[n] = math.atan2(v[1], v[0])
+        along = c @ v
+        spans[n] = float(along.max() - along.min())
+        straight[n] = float(np.abs(c @ np.array([-v[1], v[0]])).std())
+
+    print("\n%-16s %10s %12s %12s %12s"
+          % ("camera", "n", "travel mm", "straight mm", "heading deg"))
+    for n in usable:
+        print("%-16s %10d %12.0f %12.1f %12.2f"
+              % (n, len(drive[n]), 1000 * spans[n], 1000 * straight[n],
+                 math.degrees(dirs[n])))
+
+    # --- did the robot ROTATE during the "straight" drive? -------------------
+    # A drive with rotation in it is not a heading reference. Yaw must be flat.
+    rot = {n: math.degrees(np.ptp(np.unwrap(drive[n][:, 4]))) for n in usable}
+    worst_rot = max(rot.values())
+    if worst_rot > 3.0:
+        print("\n*** THE ROBOT ROTATED %.1f deg DURING THE DRIVE." % worst_rot)
+        print("    That is not a straight drive and the heading it implies is")
+        print("    not robot forward. Drive straight, no steering input, and")
+        print("    re-record. Refusing to emit a transform.")
+        return
+
+    # --- is the drive long enough to define a direction at all? -------------
+    # Angular uncertainty of the fitted direction is about (perpendicular
+    # scatter) / (length travelled). A short drive cannot give a heading.
+    shortest = min(spans.values())
+    implied = math.degrees(max(straight[n] / max(spans[n], 1e-9) for n in usable))
+    print("\n  shortest travel %.0f mm, implied heading uncertainty ~%.2f deg"
+          % (1000 * shortest, implied))
+    if shortest < 0.5:
+        print("\n*** TRAVEL TOO SHORT (%.0f mm). Under ~500 mm the direction fit"
+              % (1000 * shortest))
+        print("    is swamped by pose noise and every yaw below inherits it.")
+        print("    Drive 2-3 m in a straight line and re-record.")
+        return
+
+    # --- the cameras must agree on the direction ----------------------------
+    if len(usable) >= 2:
+        ref = dirs[usable[0]]
+        disagree = max(abs(math.degrees(math.atan2(math.sin(dirs[n] - ref),
+                                                   math.cos(dirs[n] - ref))))
+                       for n in usable)
+        print("  cameras disagree on heading by at most %.2f deg" % disagree)
+        if disagree > 2.0:
+            print("\n  !! that is larger than the fit uncertainty. One camera's")
+            print("     pose stream disagrees with the others - suspect its")
+            print("     calibration before trusting anything below.")
+
+    # The rigid body shares one direction; average what the cameras saw.
+    theta = float(np.angle(np.mean(np.exp(1j * np.array([dirs[n] for n in usable])))))
+    print("\n  ROBOT FORWARD = %+.2f deg in the layout frame" % math.degrees(theta))
+
+    # --- split K into bearing and yaw ---------------------------------------
+    #   camyaw_i(drive) = theta + Y_i      ->  Y_i = camyaw_i - theta
+    #   K_i = B_i - Y_i                    ->  B_i = K_i + Y_i
+    Y, B = {}, {}
+    for n in usable:
+        camyaw = float(np.angle(np.mean(np.exp(1j * drive[n][:, 4]))))
+        Y[n] = math.atan2(math.sin(camyaw - theta), math.cos(camyaw - theta))
+        B[n] = math.atan2(math.sin(K[n] + Y[n]), math.cos(K[n] + Y[n]))
+
+    # --- independent cross-check -------------------------------------------
+    # The SPIN measured yaw-apart between cameras without ever seeing the drive.
+    # The drive now gives each yaw separately. They must agree, and this is the
+    # only check here that uses two unrelated measurements.
+    if len(usable) >= 2:
+        print("\n  CROSS-CHECK  spin's yaw-apart vs the drive's separate yaws")
+        base = usable[0]
+        tb = spin[base][:, 0]
+        for n in usable[1:]:
+            pa, pb = [], []
+            for row in spin[n]:
+                j = int(np.argmin(np.abs(tb - row[0])))
+                if abs(tb[j] - row[0]) < 0.030:
+                    pa.append(spin[base][j]); pb.append(row)
+            if len(pa) < 20:
+                continue
+            pa, pb = np.array(pa), np.array(pb)
+            spin_dyaw = math.degrees(np.angle(np.mean(np.exp(1j * (pb[:, 4] - pa[:, 4])))))
+            drive_dyaw = math.degrees(math.atan2(math.sin(Y[n] - Y[base]),
+                                                 math.cos(Y[n] - Y[base])))
+            gap = abs(math.degrees(math.atan2(
+                math.sin(math.radians(spin_dyaw - drive_dyaw)),
+                math.cos(math.radians(spin_dyaw - drive_dyaw)))))
+            flag = "" if gap < 1.0 else "   <<< DISAGREES"
+            print("    %s -> %-14s spin %+7.2f   drive %+7.2f   gap %.2f deg%s"
+                  % (base, n, spin_dyaw, drive_dyaw, gap, flag))
+        print("    A gap much over ~1 deg means the drive was not straight or the")
+        print("    spin axis was not fixed. The two measurements are independent,")
+        print("    so agreement here is real evidence; it is not self-fulfilling.")
+
+    # --- emit ---------------------------------------------------------------
+    print("\n" + "=" * 68)
+    print("robotToCamera")
+    print("=" * 68)
+    print("%-16s %9s %9s %9s %9s %9s %9s"
+          % ("camera", "x m", "y m", "z m", "roll", "pitch", "yaw"))
+    out = {}
+    for i, n in enumerate(names):
+        if n not in usable:
+            continue
+        x = r[names.index(n)] * math.cos(B[n])
+        y = r[names.index(n)] * math.sin(B[n])
+        z = zs[n]
+        roll = tilt[n][2] if have_tilt else 0.0
+        pitch = tilt[n][0] if have_tilt else 0.0
+        yaw = math.degrees(Y[n])
+        out[n] = dict(x=x, y=y, z=z, roll_deg=roll, pitch_deg=pitch, yaw_deg=yaw)
+        print("%-16s %+9.4f %+9.4f %+9.4f %+9.2f %+9.2f %+9.2f"
+              % (n, x, y, z, roll, pitch, yaw))
+    if not have_tilt:
+        print("\n  !! roll and pitch are 0 because this spin predates those")
+        print("     columns. Re-record the spin to get them - a camera aimed at")
+        print("     tags is normally pitched up, and 0 is wrong, not neutral.")
+
+    print("\nJava:")
+    for n, v in out.items():
+        print("  // %s" % n)
+        print("  new Transform3d(")
+        print("      new Translation3d(%.4f, %.4f, %.4f),"
+              % (v["x"], v["y"], v["z"]))
+        print("      new Rotation3d(Math.toRadians(%.2f), Math.toRadians(%.2f), "
+              "Math.toRadians(%.2f)));" % (v["roll_deg"], v["pitch_deg"], v["yaw_deg"]))
+    print("\nJSON:")
+    print("  " + json.dumps(out, indent=2).replace("\n", "\n  "))
+    print("\n  WPILib robot frame: +x forward, +y LEFT, +z up; Rotation3d takes")
+    print("  (roll, pitch, yaw). Forward here is the direction the robot")
+    print("  TRAVELLED, so any steer crab is inside these numbers - which is")
+    print("  what you want for vision, and not a measurement of the crab.")
+    return out
+
+
+def solve(path, origin_height=None, forward_path=None):
     d = np.load(path, allow_pickle=True)
     names = [str(x) for x in d["names"]]
     data = {n: d[n] for n in names if d[n].size}
@@ -204,12 +385,14 @@ def solve(path, origin_height=None):
           % ("camera", "radius mm", "fit resid mm", zlab, "arc deg"))
     res_all = {}
     tilt = {}
+    zs = {}
     for i, n in enumerate(names):
         p = data[n]
         rad = np.hypot(p[:, 1] - cx, p[:, 2] - cy)
         res = rad - r[i]
         res_all[n] = res
         z = p[:, 3].mean() + (origin_height or 0.0)
+        zs[n] = z
         print("%-16s %10.1f %12.1f %12.1f %11.1f"
               % (n, 1000 * r[i], 1000 * res.std(), 1000 * z, arcs[n]))
         if have_tilt:
@@ -278,6 +461,33 @@ def solve(path, origin_height=None):
                   % (dyaw.mean(), dyaw.std()))
             print("     separation    %7.1f mm   sd %.1f" % (sep.mean(), sep.std()))
 
+    # --- the one constant the spin pins without any forward reference -------
+    # Through a spin the robot heading theta sweeps, and for each camera
+    #     bearing_i(t) = theta(t) + B_i      camyaw_i(t) = theta(t) + Y_i
+    # where B_i is the camera's bearing in the ROBOT frame and Y_i its mount
+    # yaw. theta cancels in the difference, so
+    #     K_i = B_i - Y_i
+    # is observable with no anchor at all. What is NOT observable is the split:
+    # every camera shares one unknown, "where is robot forward in the layout
+    # frame", and that single number is the entire job of the straight drive.
+    K = {}
+    for i, n in enumerate(names):
+        p = data[n]
+        bear = np.arctan2(p[:, 2] - cy, p[:, 1] - cx)
+        K[n] = float(np.angle(np.mean(np.exp(1j * (bear - p[:, 4])))))
+    print("\nANCHOR-FREE CONSTANT  K = bearing - mount yaw, in the robot frame")
+    for n in names:
+        print("  %-16s K %+8.2f deg" % (n, math.degrees(K[n])))
+    print("  One shared unknown remains for the whole rig. Fix 'robot forward'")
+    print("  once and every camera's bearing and yaw follow from its K.")
+
+    if forward_path:
+        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt)
+    else:
+        print("\n  No --forward given, so bearing and yaw stay RELATIVE and no")
+        print("  robotToCamera can be emitted. Record one straight drive with")
+        print("  `record`, then pass it as --forward.")
+
     # A circle fit is only meaningful if the residual is small COMPARED TO THE
     # RADIUS. Pivoting about a point close to the cameras gives a tiny arm that
     # pose noise swamps - measured: a 28 mm radius with a 13 mm residual, which
@@ -307,6 +517,11 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="photonvision.local")
     ap.add_argument("--cameras", default="OV9281,OV9281 (1)",
                     help="comma-separated nicknames")
+    ap.add_argument("--forward", default=None, metavar="FILE",
+                    help="a recording of one STRAIGHT drive, made with `record`. "
+                         "Resolves the single shared unknown - where robot forward "
+                         "points - and turns the relative answers into a full "
+                         "robotToCamera per camera.")
     ap.add_argument("--origin-height", type=float, default=None,
                     help="metres from the floor (or robot origin plane) up to the "
                          "layout's Z=0. A surveyed bench layout anchors Z to a TAG, so "
@@ -317,4 +532,4 @@ if __name__ == "__main__":
     if a.mode == "record":
         record(a.file, a.seconds, a.host, names)
     else:
-        solve(a.file, a.origin_height)
+        solve(a.file, a.origin_height, a.forward)
