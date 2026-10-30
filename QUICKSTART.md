@@ -399,9 +399,11 @@ on the spin itself — above 1° means the rotation axis was not vertical (lifte
 wheel, flexing frame). Tilt is measured in the *field* frame, which equals the
 robot frame only while the robot sits level.
 
-Sanity-check the reported radius against a tape from the pivot to the lens, and
-expect a few mm of entrance-pupil offset *inside* the barrel — the optical
-centre sits behind the glass. This check needs a real lever arm; see below.
+Sanity-check the reported radius against a tape from the rotation centre to the
+lens — on a bench that is your chosen pivot, on a robot roughly the middle of
+the frame. Expect a few mm of entrance-pupil offset *inside* the barrel; the
+optical centre sits behind the glass. This check needs a real lever arm to be
+worth anything; see below.
 
 ### If a camera sits near the middle of the robot
 
@@ -434,11 +436,12 @@ the spin/drive yaw cross-check is the only independent evidence you get, so
 read it rather than skipping to the transform. The solve prints a `NOTE` naming
 the affected cameras so the large percentages do not look like a failure.
 
-**Do not move the pivot off the robot's centre to get a bigger arm.** The
-rotation centre of the in-place spin *is* the point `robotToCamera` must
-reference — WPILib's kinematics uses that same centre. An arc with a larger
-radius measures the cameras against the arc's centre, which is not the robot
-origin, and you would have gained precision in the wrong frame.
+**Nothing gets moved for this.** The camera stays bolted where it belongs, and
+on a swerve you don't choose the spin's centre either — it is the kinematic
+centre, which is exactly the point `robotToCamera` must reference. The one
+tempting mistake is driving a wide *arc* instead of spinning in place, to get a
+bigger lever arm: that measures the cameras against the arc's centre, which is
+not the robot origin, so you would gain precision in the wrong frame.
 
 ---
 
