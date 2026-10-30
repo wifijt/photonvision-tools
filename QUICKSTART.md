@@ -118,6 +118,52 @@ python3 /opt/photontune/photontune.py --host 127.0.0.1 --baseline-only
 
 **STOP if that fails.** Nothing below will work.
 
+Then the real tune, pointed at tags, in the light you will play in:
+
+```sh
+python3 /opt/photontune/photontune.py --host 127.0.0.1
+```
+
+### If the room is dark, or the lights flicker
+
+Observed 2026-10-29 in a school classroom: visible frame-to-frame flicker in
+the camera viewer, and too dark to meet the blur budget.
+
+Mains at 60 Hz makes light pulse at **120 Hz — an 8.33 ms period**. The default
+863 µs exposure samples only **10%** of that, at a different phase every frame,
+so brightness swings frame to frame. On a global-shutter sensor that shows as
+the whole frame pulsing, not as banding.
+
+**You cannot fix this with exposure.** Averaging the flicker out needs a full
+period — 8.33 ms — which is **58 px of smear** at 360 °/s, nearly 10× the 6 px
+budget. Flicker-immune and blur-immune are mutually exclusive in that room.
+
+What actually helps, best first:
+
+| lever | effect | cost |
+|---|---|---|
+| `--blur-rate 90` | **4× the exposure** (863 → 3454 µs) | smear during fast spins |
+| `--dwell 12` | error bar **1.7× tighter** | run takes 3× longer |
+| 640×400 | 2× exposure again (`fx` halves) | detection range; needs its own calibration |
+
+```sh
+python3 /opt/photontune/photontune.py --host 127.0.0.1 --blur-rate 90 --dwell 12
+```
+
+`--blur-rate` is the honest one. 360 °/s is the harshest case, but a pose fix
+taken mid-spin is discarded downstream anyway — the measurements that matter
+happen while lining up, at perhaps 90 °/s. `--dwell` helps because 4 s already
+spans ~480 flicker cycles, so the *mean* is unbiased; it is the **error bar**
+that defeats the gain walk, and that shrinks as √frames.
+
+Do **not** try to phase-lock the frame rate to the flicker. The sensor runs off
+a crystal and the grid does not, so the phase walks through a full cycle in
+minutes — and it would make things worse, trading a wide error bar for trials
+that are individually quiet and not comparable to each other.
+
+⚠️ photontune has **no flicker detection**. A flickering room reports as a dark
+room, and nothing tells you the measurement was being modulated underneath.
+
 ---
 
 ## 2. Calibrate each camera
@@ -176,9 +222,26 @@ python3 survey/capture_corners.py --host PI frames.json     # move the camera ar
 python3 survey/solve_layout.py frames.json layout.json 0.1651   # <- YOUR measured size
 ```
 
+`photon_calib.py` takes the host **either way** — `PI` or `--host PI`. It used
+to be positional only, so `--host PI` tried to resolve a machine called
+`--host` and died in `getaddrinfo` naming neither the flag nor the address.
+
+**Hold the camera in your hands, and move-then-pause.** Hand-held beats a robot
+mount here: a bundle adjustment wants viewpoint spread, and a robot is stuck at
+one height and one pitch. Step to a new spot, hold still a beat, step again —
+`capture_corners` de-duplicates on a 25 px signature, so holding still cannot
+flood the file, and it has **no blur filter**: a smeared frame is kept and
+weighted like a sharp one. Vary distance, angle and *height*, not just position
+along the wall.
+
 While capturing: every tag must be seen **together with at least two others**,
 from **more than one** viewpoint. A tag seen on one link gets placed with false
-confidence (DEFECTS #9).
+confidence (DEFECTS #9). Read the `co-visibility:` line it prints at the end —
+that, not the RMS, tells you whether the survey is any good.
+
+**Minimum tags:** 2 will produce a layout; **3 with all pairs seen** is the
+minimum worth trusting, because a triangle closes and a single link cannot be
+checked.
 
 Upload:
 
@@ -186,22 +249,93 @@ Upload:
 curl -F "data=@layout.json" http://PI:5800/api/settings/apriltagFieldLayout
 ```
 
+### The reference tag is 0,0,0 — and it is a TAG, not the floor
+
+`solve_layout` anchors on the **best-observed** tag (most observations, not the
+lowest ID) and prints it: `reference 2 (310 observations)`. Every x/y/z is a
+delta from that tag's centre, so **z is a height difference from a tag, not a
+height above the carpet**.
+
+Two consequences:
+
+- Measure **that** tag's centre height above the floor, after the solve tells
+  you which one it is. Re-running the survey can hand the anchor to a different
+  tag — re-read the line, don't assume.
+- Step 4 needs that number as `--origin-height`. X and Y don't need it; z does.
+
+The `"field": {"length": 8.0, "width": 8.0}` in the output is a **placeholder**,
+not a measurement. Nothing in this repo reads it; WPILib only uses it for
+`setOrigin(kRedAllianceWallRightSide)`.
+
 ---
 
-## 4. Robot camera offsets
+## 4. Robot camera offsets → `robotToCamera`
 
-Spin the robot in place, slowly, two full turns, tags in view the whole time.
+Two recordings. The layout from step 3 must already be uploaded — this reads
+PhotonVision's **multi-tag** pose, which does not exist without it.
+
+**4a. The spin.** Robot in place, slowly, two full turns, tags in view the
+whole time.
 
 ```sh
-python3 mount/calibrate_mount.py record spin.npz 60
-python3 mount/calibrate_mount.py solve  spin.npz
+python3 mount/calibrate_mount.py record spin.npz 60 --host RIO
 ```
 
-Gives each camera's radius and bearing from the spin axis, and the
-camera-to-camera yaw. **"Robot forward" needs one extra straight drive** — this
-step gives you everything else.
+**4b. One straight drive.** 2–3 m, no steering input, tags in view.
 
-Sanity-check the reported radius against a tape from the pivot to the lens.
+```sh
+python3 mount/calibrate_mount.py record drive.npz 15 --host RIO
+```
+
+**4c. Solve both together.**
+
+```sh
+python3 mount/calibrate_mount.py solve spin.npz \
+        --forward drive.npz \
+        --origin-height 1.4351        # <- REF TAG height from step 3
+```
+
+Out comes a full `robotToCamera` per camera — x, y, z, roll, pitch, yaw — as a
+table, as pasteable Java `Transform3d`, and as JSON.
+
+### Why two recordings
+
+The spin alone fixes **radius, z, pitch and roll** absolutely, and bearing and
+yaw only as *differences* between cameras. What it pins without any anchor is
+`K = bearing − mount yaw` per camera; what it cannot do is split that, because
+every camera shares one unknown — **where robot forward points**. One number
+for the whole rig, and the straight drive supplies it.
+
+**"Forward" means the direction the robot actually travelled.** Not the
+Pigeon's zero, not the chassis centreline. So if the steer offsets are off and
+the robot crabs, that crab is *inside* these transforms. That is what you want
+for vision — `robotToCamera` then lives in the frame the drivetrain really
+moves in — and it is **not** a measurement of the crab.
+
+### What it refuses to do
+
+| condition | what happens |
+|---|---|
+| robot rotated > 3° during the drive | **refuses** — that is not a heading reference |
+| travel < 500 mm | **refuses** — pose noise swamps the direction fit |
+| cameras disagree > 2° on heading | warns — suspect one camera's calibration |
+| spin and drive disagree on yaw-apart | flags `<<< DISAGREES` |
+
+That last one is the real check: the spin measures camera-to-camera yaw without
+ever seeing the drive, and the drive gives each yaw separately. Independent
+measurements, so agreement is evidence rather than self-fulfilling. Expect
+under ~1°.
+
+### Read the sd columns
+
+`pitch` and `roll` are **constant** through a spin, so their sd is a free check
+on the spin itself — above 1° means the rotation axis was not vertical (lifted
+wheel, flexing frame). Tilt is measured in the *field* frame, which equals the
+robot frame only while the robot sits level.
+
+Sanity-check the reported radius against a tape from the pivot to the lens, and
+expect a few mm of entrance-pupil offset *inside* the barrel — the optical
+centre sits behind the glass.
 
 ---
 
