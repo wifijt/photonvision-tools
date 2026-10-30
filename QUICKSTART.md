@@ -278,14 +278,25 @@ PhotonVision's **multi-tag** pose, which does not exist without it.
 whole time.
 
 ```sh
-python3 mount/calibrate_mount.py record spin.npz 60 --host RIO
+python3 mount/calibrate_mount.py record spin.npz 60 --host RIO \
+        --gyro-topic /SmartDashboard/Gyro
 ```
+
+Leave `--gyro-topic` off the **first** run and it prints every NT number topic
+that looks like a heading, with its current value. Pick the robot's heading —
+not a module angle, not a setpoint — and use that name from then on. Rotate the
+robot by hand and watch which one moves if two look plausible.
 
 **4b. One straight drive.** 2–3 m, no steering input, tags in view.
 
 ```sh
-python3 mount/calibrate_mount.py record drive.npz 15 --host RIO
+python3 mount/calibrate_mount.py record drive.npz 15 --host RIO \
+        --gyro-topic /SmartDashboard/Gyro
 ```
+
+**Do not zero or re-zero the gyro between 4a and 4b.** The offset in 4d is
+measured against whatever the gyro's zero was during the drive; move it in
+between and the number is meaningless.
 
 **4c. Solve both together.**
 
@@ -297,6 +308,60 @@ python3 mount/calibrate_mount.py solve spin.npz \
 
 Out comes a full `robotToCamera` per camera — x, y, z, roll, pitch, yaw — as a
 table, as pasteable Java `Transform3d`, and as JSON.
+
+### 4d. The Pigeon — read two numbers, apply them by hand
+
+With `--gyro-topic` on both recordings you also get a `GYRO CHECK` block from
+the spin and a `GYRO vs FORWARD` block from the drive. Nothing is written to
+the robot; you apply both by hand, in two *different* places, and that split
+matters.
+
+**Number one — `SCALE`, from the spin. Want `+1.0000`.** The spin sweeps a
+known amount of yaw, so the ratio against the cameras is a direct measurement
+and needs no anchor. This is the half **nothing downstream absorbs**: a
+constant offset gets swallowed by any pose reset from vision, but a scale error
+compounds all match.
+
+| what it prints | what it means | where you fix it |
+|---|---|---|
+| `SCALE +1.0000` | healthy | nothing to do |
+| `SCALE -1.0000` | counts the wrong way | negate it in robot code, then re-record |
+| `SCALE +0.9850` | axis is ~10° off vertical, reads `cos(tilt)` of truth | **Phoenix Tuner X → Pigeon 2 → Mount Pose**, which is exactly what Mount Pose is for |
+| `nonlinearity > 1°` | latency between the streams, or the spin axis moved | re-record before believing the scale |
+
+Fix the scale **first**. While it is wrong the tool refuses to emit an offset
+constant at all, because a gyro with the wrong sign or a stretched scale has no
+single offset — what it reads depends on the path it took to get there.
+
+**Number two — `GYRO -> FORWARD OFFSET`, from the drive.** This one goes in
+**robot code where the heading is read**, not in Mount Pose and not in
+`setYaw()`:
+
+```java
+// measured 2026-10-30, re-measure after any steer-offset change
+private static final Rotation2d kGyroToForward = Rotation2d.fromDegrees(+7.00);
+
+public Rotation2d getHeading() {
+  return pigeon.getRotation2d().plus(kGyroToForward);
+}
+```
+
+Mount Pose is for the physical mount orientation, and `setYaw()` fights
+whatever else zeroes the gyro at init. A constant where the heading is **read**
+composes with both of those and shows up in a diff.
+
+**Whether you apply it at all depends on how you zero the gyro.** The offset is
+`crab − gyro zero error`, so:
+
+| how your code zeroes the gyro | what the offset is for |
+|---|---|
+| `resetPose()` from a vision measurement at init | **a sanity check only** — the reset already absorbs it. Over ~3° means the Pigeon is mounted crooked; go look at it. |
+| squared to a wall and a button press | **apply it.** Nothing absorbs it, and without it odometry dead-reckons along a heading the robot does not travel. |
+| squared to a known mechanical reference right before 4b | this number **is the steer crab**, which is otherwise unobservable here — a camera cannot supply an independent heading, a chassis-referenced gyro can. |
+
+**Re-measure after anything that changes the steer offsets** — Tuner X, a
+re-torqued module, a swapped encoder. The crab moves, so the constant goes
+stale. Re-record 4b and re-run 4c; the spin still stands.
 
 ### Why two recordings
 
