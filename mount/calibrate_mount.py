@@ -38,6 +38,9 @@ needs one extra straight drive; this tool gives you everything else.
 WHAT NEEDS AN ANCHOR, AND WHAT DOES NOT
   radius, scale, relative bearing/yaw   no anchor - they are differences, and
                                         scale comes from the known tag size
+  pitch, roll                           no anchor - gravity defines them, so
+                                        they are absolute. Constant through the
+                                        spin, so their sd is the quality check.
   Z (camera height)                     YES - pass --origin-height. A surveyed
                                         bench layout anchors Z to a TAG, not the
                                         floor. The official FRC field layout
@@ -107,8 +110,15 @@ def record(path, seconds, host, names):
             b = mt.estimatedPose.best
             q = b.rotation().getQuaternion()
             R = q2R(q.W(), q.X(), q.Y(), q.Z())
+            # ZYX (WPILib Rotation3d) order: roll about X, pitch about Y, yaw
+            # about Z. Pitch via atan2 rather than asin(-R[2,0]) so it stays
+            # well-conditioned near +/-90 deg. Columns APPENDED, never inserted:
+            # solve() indexes 1..4 positionally and a .npz recorded before this
+            # change has only 5 columns.
             rows[n].append([md.captureTimestampMicros / 1e6, b.X(), b.Y(), b.Z(),
-                            math.atan2(R[1, 0], R[0, 0])])
+                            math.atan2(R[1, 0], R[0, 0]),
+                            math.atan2(-R[2, 0], math.hypot(R[0, 0], R[1, 0])),
+                            math.atan2(R[2, 1], R[2, 2])])
         if time.time() - t0 - last > 10:
             last = time.time() - t0
             print("  %3ds  %s" % (last, "  ".join("%s=%d" % (n, len(rows[n])) for n in names)),
@@ -188,9 +198,12 @@ def solve(path, origin_height=None):
     print("  X and Y need no anchor - the radius is a DIFFERENCE from this centre,")
     print("  so wherever the layout puts its origin cancels out.")
     zlab = "height mm" if origin_height is not None else "z vs origin"
+    # Pitch and roll are present only in recordings made after they were added.
+    have_tilt = all(data[n].shape[1] >= 7 for n in names)
     print("\n%-16s %10s %12s %12s %12s"
           % ("camera", "radius mm", "fit resid mm", zlab, "arc deg"))
     res_all = {}
+    tilt = {}
     for i, n in enumerate(names):
         p = data[n]
         rad = np.hypot(p[:, 1] - cx, p[:, 2] - cy)
@@ -199,6 +212,36 @@ def solve(path, origin_height=None):
         z = p[:, 3].mean() + (origin_height or 0.0)
         print("%-16s %10.1f %12.1f %12.1f %11.1f"
               % (n, 1000 * r[i], 1000 * res.std(), 1000 * z, arcs[n]))
+        if have_tilt:
+            # Circular mean, so a roll sitting near +/-180 does not average to 0.
+            # Both are CONSTANT through the spin, which is why the sd doubles as
+            # the check: a large sd means the axis was not vertical or the pose
+            # stream is noisy, not that the camera is moving.
+            pit = np.angle(np.exp(1j * p[:, 5]))
+            rol = np.angle(np.exp(1j * p[:, 6]))
+            tilt[n] = (np.degrees(np.angle(np.mean(np.exp(1j * pit)))),
+                       np.degrees(pit.std()),
+                       np.degrees(np.angle(np.mean(np.exp(1j * rol)))),
+                       np.degrees(rol.std()))
+
+    if have_tilt:
+        print("\nTILT  (needs NO anchor - gravity defines it, and these are")
+        print("       absolute, unlike bearing and yaw)")
+        print("  %-16s %10s %8s %10s %8s" % ("camera", "pitch deg", "sd", "roll deg", "sd"))
+        for n in names:
+            pm, ps, rm, rs = tilt[n]
+            print("  %-16s %+10.2f %8.2f %+10.2f %8.2f" % (n, pm, ps, rm, rs))
+        print("  Camera pitch/roll in the FIELD frame. That equals pitch/roll")
+        print("  relative to the ROBOT only while the robot sits level - true on")
+        print("  a flat floor, not true on a ramp or with a wheel on a cable.")
+        noisy = [n for n in names if tilt[n][1] > 1.0 or tilt[n][3] > 1.0]
+        if noisy:
+            print("  !! sd above 1 deg on %s - the rotation axis was probably not"
+                  % ", ".join(noisy))
+            print("     vertical. Pitch and roll should be CONSTANT through a spin.")
+    else:
+        print("\n  (no pitch/roll in this recording - it predates those columns;")
+        print("   re-record to get them)")
     if origin_height is None:
         print("\n  !! Z IS NOT ANCHORED. Those heights are relative to the layout's Z=0,")
         print("     which for a surveyed bench layout is the anchor TAG, not the floor.")
