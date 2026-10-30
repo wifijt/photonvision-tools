@@ -47,6 +47,12 @@ WHAT NEEDS AN ANCHOR, AND WHAT DOES NOT
                                         already carries true heights (pass 0).
   "robot forward"                       YES - needs one straight drive. Not
                                         available, and not meaningful, on a bench.
+  gyro scale and sign                   no anchor - the spin sweeps a known
+                                        amount of yaw, so the RATIO is a direct
+                                        measurement. Pass --gyro-topic.
+  gyro-to-forward offset                YES - the straight drive again. Mixes
+                                        the steer crab with the gyro's zero, so
+                                        read _gyro_offset before applying it.
 
 VALIDATED 2026-09-14 on a two-camera bench rig, hand-pivoted about a fixed point:
   - synthetic ground truth recovered exactly (centre, radii, yaw)
@@ -77,6 +83,82 @@ import numpy as np
 
 PER_BIN = 12          # max samples per 2-degree slice of the arc
 
+# A gyro published as a bare number carries no units. These are the only two it
+# is ever in, and the spin tells us which: see _gyro_track.
+GYRO_UNITS = (("degrees", 180.0 / math.pi), ("radians", 1.0))
+
+GYRO_HINTS = ("gyro", "yaw", "heading", "angle", "rotation", "pigeon", "imu",
+              "navx", "theta")
+
+
+def _gyro_candidates(inst):
+    """List NT number topics that look like a heading, so you can pick one.
+
+    There is no standard place for the gyro on NetworkTables - it is wherever
+    the team's robot code happened to publish it. A default would be wrong on
+    every robot but one, so print what is actually on the wire instead.
+    """
+    found = []
+    for t in inst.getTopics():
+        name = t.getName()
+        if t.getTypeString() not in ("double", "float", "int", "int64"):
+            continue
+        if not any(h in name.lower() for h in GYRO_HINTS):
+            continue
+        try:
+            v = inst.getDoubleTopic(name).subscribe(float("nan")).get()
+        except Exception:
+            v = float("nan")
+        found.append((name, t.getTypeString(), v))
+    print("\nNT number topics that look like a heading:")
+    if not found:
+        print("  (none). Either robot code is not publishing one, or it is not")
+        print("  named anything like gyro/yaw/heading. Check the PhotonVision or")
+        print("  dashboard NT tree, then pass --gyro-topic /Full/Topic/Name.")
+        return
+    for name, ty, v in sorted(found):
+        print("  %-52s %-7s %s" % (name, ty, "nan" if v != v else "%.3f" % v))
+    print("  Pick the one that is the ROBOT's heading - not a module angle, not")
+    print("  a setpoint - and pass it as --gyro-topic. Rotate the robot by hand")
+    print("  and watch which one moves if you are not sure.")
+
+
+def _gyro_track(camyaw_unwrapped, graw):
+    """Units, sign and scale of the gyro, measured against the spin.
+
+    The spin is the only place this is observable, and it needs no anchor: the
+    camera yaw sweeps a known amount, so the RATIO of the two is a direct
+    measurement. A healthy gyro gives scale +1.000 in one of two unit systems.
+
+    Returns (rel_resid_rad, unit, scale, how, to_rad) or None.
+    """
+    a = np.asarray(camyaw_unwrapped, dtype=float)
+    a = a - a.mean()
+    if float(a @ a) < 1e-9:
+        return None
+    best = None
+    # Robot code publishes yaw either continuous (Pigeon2 accumulates past 360)
+    # or wrapped to +/-180. Try both readings and let the fit decide.
+    for how, g in (("as published", np.asarray(graw, dtype=float)),
+                   ("unwrapped, degrees", np.degrees(np.unwrap(np.radians(graw)))),
+                   ("unwrapped, radians", np.unwrap(np.asarray(graw, dtype=float)))):
+        if not np.all(np.isfinite(g)):
+            continue
+        b = g - g.mean()
+        slope = float(a @ b / (a @ a))
+        if abs(slope) < 1e-9:
+            continue
+        # Residual expressed in TRUE yaw radians, so it is comparable across
+        # unit hypotheses. A plain residual is not - it just follows the units.
+        rel = float(np.std(b - slope * a) / abs(slope))
+        for unit, per_rad in GYRO_UNITS:
+            scale = slope / per_rad
+            if 0.5 < abs(scale) < 2.0:
+                cand = (rel, unit, scale, how, 1.0 / per_rad)
+                if best is None or cand[0] < best[0]:
+                    best = cand
+    return best
+
 
 def q2R(w, x, y, z):
     return np.array([[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
@@ -84,7 +166,7 @@ def q2R(w, x, y, z):
                      [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
 
 
-def record(path, seconds, host, names):
+def record(path, seconds, host, names, gyro_topic=None):
     import ntcore
     from photonlibpy.photonCamera import PhotonCamera
     inst = ntcore.NetworkTableInstance.getDefault()
@@ -92,6 +174,18 @@ def record(path, seconds, host, names):
     inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
     cams = {n: PhotonCamera(n) for n in names}
     time.sleep(2.5)
+    gyro = None
+    if gyro_topic:
+        gyro = inst.getDoubleTopic(gyro_topic).subscribe(float("nan"))
+        if gyro.get() != gyro.get():
+            print("!! %s is not publishing yet - recording anyway, but the gyro"
+                  % gyro_topic)
+            print("   column will be nan and the gyro checks will be skipped.")
+            _gyro_candidates(inst)
+    else:
+        _gyro_candidates(inst)
+        print("\n  (recording WITHOUT a gyro column - pass --gyro-topic to get")
+        print("   the Pigeon scale check and the gyro-to-forward offset)")
     rows = {n: [] for n in names}
     seen = {n: set() for n in names}
     print("RECORDING %.0fs - rotate the rig about a fixed point now" % seconds, flush=True)
@@ -119,7 +213,8 @@ def record(path, seconds, host, names):
             rows[n].append([md.captureTimestampMicros / 1e6, b.X(), b.Y(), b.Z(),
                             math.atan2(R[1, 0], R[0, 0]),
                             math.atan2(-R[2, 0], math.hypot(R[0, 0], R[1, 0])),
-                            math.atan2(R[2, 1], R[2, 2])])
+                            math.atan2(R[2, 1], R[2, 2]),
+                            gyro.get() if gyro is not None else float("nan")])
         if time.time() - t0 - last > 10:
             last = time.time() - t0
             print("  %3ds  %s" % (last, "  ".join("%s=%d" % (n, len(rows[n])) for n in names)),
@@ -131,7 +226,7 @@ def record(path, seconds, host, names):
         print("  %-14s %d solves" % (n, len(rows[n])))
 
 
-def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt):
+def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None):
     """Resolve 'robot forward' from one straight drive, then emit robotToCamera.
 
     WHAT "FORWARD" MEANS HERE, stated plainly because it is a choice and not a
@@ -308,7 +403,91 @@ def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt):
     print("  (roll, pitch, yaw). Forward here is the direction the robot")
     print("  TRAVELLED, so any steer crab is inside these numbers - which is")
     print("  what you want for vision, and not a measurement of the crab.")
+
+    _gyro_offset(usable, drive, theta, gyro)
     return out
+
+
+def _gyro_offset(usable, drive, theta, gyro):
+    """How far the gyro's reported heading sits from the direction of travel.
+
+    WHAT THIS NUMBER IS. The gyro reports G. The robot's real heading in the
+    layout frame is H, and it travels along H + c where c is the steer crab. So
+
+        G = H + psi        psi = gyro mount yaw + whatever its zero was set to
+        offset = theta - G = c - psi
+
+    which mixes the crab with the gyro's zero. That matters, because it decides
+    what the number is good for:
+
+      - You zero the gyro from a VISION pose at init: the offset is absorbed by
+        that reset and this number is only a sanity check. Anything over a few
+        degrees means the Pigeon is mounted crooked.
+      - You zero the gyro MECHANICALLY - square the robot to a wall and press a
+        button: then psi is known and nothing absorbs the offset. Apply it, or
+        odometry dead-reckons along a heading the robot does not travel.
+      - You zeroed it against a known mechanical reference just before this
+        recording: then psi is ~0 and this offset IS the crab, which is
+        otherwise unobservable here. A camera cannot supply an independent
+        heading; a gyro referenced to the chassis can.
+
+    The scale check in solve() is the half that nothing absorbs, so read that
+    first.
+    """
+    if not gyro:
+        return
+    ref = max(usable, key=lambda n: len(drive[n]))
+    if drive[ref].shape[1] < 8:
+        print("\n  (the --forward recording has no gyro column, so no gyro offset.")
+        print("   Re-record the drive with --gyro-topic to get it.)")
+        return
+    graw = drive[ref][:, 7]
+    if not np.all(np.isfinite(graw)):
+        print("\n  (the --forward recording's gyro column is nan - the topic was")
+        print("   not publishing during the drive. No offset.)")
+        return
+    g = np.unwrap(graw * gyro["to_rad"]) / gyro["scale"]
+
+    print("\n" + "=" * 68)
+    print("GYRO vs FORWARD")
+    print("=" * 68)
+    swept = math.degrees(np.ptp(g))
+    print("  gyro moved %.2f deg during the drive (from %s)" % (swept, ref))
+    if swept > 3.0:
+        print("  !! the cameras said the robot did not rotate and the gyro says it")
+        print("     did. One of them is wrong. Do not apply anything below until")
+        print("     you know which - re-record and see if it repeats.")
+    gm = float(np.angle(np.mean(np.exp(1j * g))))
+    off = math.degrees(math.atan2(math.sin(theta - gm), math.cos(theta - gm)))
+    print("  gyro read %+.2f deg (mean) while the robot travelled %+.2f deg"
+          % (math.degrees(gm), math.degrees(theta)))
+    print("\n  GYRO -> FORWARD OFFSET  %+.2f deg" % off)
+    print("    ADD this to the gyro's reported heading to get the direction the")
+    print("    robot actually travels - the same frame robotToCamera above uses.")
+    if not gyro.get("ok"):
+        print("\n  *** NOT EMITTING A CONSTANT TO PASTE. The scale check above")
+        print("      failed, and a gyro with the wrong sign or a stretched scale")
+        print("      has no single offset: what it reads depends on the path it")
+        print("      took to get there, so the %+.2f deg above is only true for" % off)
+        print("      this one recording. Fix the sign and the scale first, then")
+        print("      re-record both the spin and the drive.")
+        return
+    print("\n  Java, where you read the heading:")
+    print("    // measured %s, re-measure after any steer-offset change"
+          % time.strftime("%Y-%m-%d"))
+    print("    private static final Rotation2d kGyroToForward =")
+    print("        Rotation2d.fromDegrees(%+.2f);" % off)
+    print("    public Rotation2d getHeading() {")
+    print("      return pigeon.getRotation2d().plus(kGyroToForward);")
+    print("    }")
+    print("\n  Put it in CODE, not in the Pigeon's MountPose and not with")
+    print("  setYaw(): MountPose is for the physical mount orientation and")
+    print("  setYaw fights whatever else zeroes the gyro at init. A constant")
+    print("  where the heading is READ composes with both.")
+    print("\n  This offset is (crab - gyro zero error), so it is only as stable")
+    print("  as the gyro's zero. If you reset the pose from vision at init, that")
+    print("  reset already absorbs it and this is a sanity check: over ~3 deg")
+    print("  means the Pigeon is mounted crooked.")
 
 
 def solve(path, origin_height=None, forward_path=None):
@@ -481,8 +660,58 @@ def solve(path, origin_height=None, forward_path=None):
     print("  One shared unknown remains for the whole rig. Fix 'robot forward'")
     print("  once and every camera's bearing and yaw follow from its K.")
 
+    # --- the gyro, checked against the spin ---------------------------------
+    # Scale and sign need no anchor: the camera yaw sweeps a known amount, so
+    # the ratio is a direct measurement. This is the half of the gyro that
+    # NOTHING downstream absorbs - a constant offset is swallowed by any pose
+    # reset, but a scale error compounds over a match.
+    gyro = None
+    have_gyro = all(data[n].shape[1] >= 8 and np.all(np.isfinite(data[n][:, 7]))
+                    for n in names)
+    if have_gyro:
+        ref = max(names, key=lambda n: len(data[n]))
+        p = data[ref]
+        fit = _gyro_track(np.unwrap(p[:, 4]), p[:, 7])
+        print("\nGYRO CHECK  (from %s, %d samples)" % (ref, len(p)))
+        if fit is None:
+            print("  the spin did not sweep enough yaw to measure the gyro.")
+        else:
+            rel, unit, scale, how, to_rad = fit
+            # ok gates the pasteable offset further down. A gyro with the
+            # wrong sign or a stretched scale has no single constant offset at
+            # all - its reading depends on the path it took to get there - so
+            # emitting a number to paste would be worse than emitting nothing.
+            gyro = dict(unit=unit, scale=scale, to_rad=to_rad,
+                        ok=(scale > 0 and abs(scale - 1.0) <= 0.005
+                            and math.degrees(rel) <= 1.0))
+            print("  published in %s, read %s" % (unit, how))
+            print("  SCALE %+.4f   (want +1.0000)" % scale)
+            print("  nonlinearity %.2f deg sd about a straight line" % math.degrees(rel))
+            if scale < 0:
+                print("  !! SIGN IS INVERTED. The gyro counts the opposite way from")
+                print("     WPILib, which wants counter-clockwise POSITIVE seen from")
+                print("     above. Negate it in robot code before anything else here")
+                print("     means much.")
+            err = abs(abs(scale) - 1.0)
+            if err > 0.005:
+                tiltdeg = math.degrees(math.acos(min(1.0, abs(scale)))) if abs(scale) < 1 else 0.0
+                print("  !! scale is off by %.1f%%. Over one 360 deg match-long" % (100 * err))
+                print("     accumulation that is %.1f deg of drift, and no pose reset"
+                      % (360 * err))
+                print("     absorbs it. A gyro whose axis is %.0f deg off vertical reads"
+                      % tiltdeg)
+                print("     cos(tilt) of the truth - fix it in the Pigeon's MountPose,")
+                print("     which is exactly what MountPose is for.")
+            if math.degrees(rel) > 1.0:
+                print("  !! nonlinear by more than 1 deg. Scale is then not the whole")
+                print("     story - suspect latency between the two streams, or a")
+                print("     spin axis that was not fixed.")
+    else:
+        print("\n  (no gyro column in this spin - record with --gyro-topic to get")
+        print("   the Pigeon scale/sign check and the gyro-to-forward offset)")
+
     if forward_path:
-        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt)
+        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt, gyro)
     else:
         print("\n  No --forward given, so bearing and yaw stay RELATIVE and no")
         print("  robotToCamera can be emitted. Record one straight drive with")
@@ -522,6 +751,12 @@ if __name__ == "__main__":
                          "Resolves the single shared unknown - where robot forward "
                          "points - and turns the relative answers into a full "
                          "robotToCamera per camera.")
+    ap.add_argument("--gyro-topic", default=None, metavar="TOPIC",
+                    help="full NT topic of the robot's heading as a number, e.g. "
+                         "/SmartDashboard/Gyro. Recorded alongside the cameras so "
+                         "the spin can check the Pigeon's scale and sign and the "
+                         "drive can give the gyro-to-forward offset. Omit it on "
+                         "`record` and the candidate topics are listed for you.")
     ap.add_argument("--origin-height", type=float, default=None,
                     help="metres from the floor (or robot origin plane) up to the "
                          "layout's Z=0. A surveyed bench layout anchors Z to a TAG, so "
@@ -530,6 +765,6 @@ if __name__ == "__main__":
     a = ap.parse_args()
     names = [c.strip() for c in a.cameras.split(",")]
     if a.mode == "record":
-        record(a.file, a.seconds, a.host, names)
+        record(a.file, a.seconds, a.host, names, a.gyro_topic)
     else:
         solve(a.file, a.origin_height, a.forward)
