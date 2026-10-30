@@ -90,6 +90,12 @@ PER_BIN = 12          # max samples per 2-degree slice of the arc
 # that wandered. 5 mm sits between those.
 RESID_LIMIT_MM = 5.0
 
+# A fitted radius larger than this means the rotation centre is not on the
+# robot, i.e. an ARC was driven instead of a spin in place. FRC frame perimeter
+# caps a robot at 120 in, so even a 48x30 in frame has a half-diagonal of about
+# 0.71 m; a bench rig is nearer 0.3 m. Over 1 m is diagnostic, not marginal.
+SPIN_RADIUS_LIMIT_M = 1.0
+
 # A gyro published as a bare number carries no units. These are the only two it
 # is ever in, and the spin tells us which: see _gyro_track.
 GYRO_UNITS = (("degrees", 180.0 / math.pi), ("radians", 1.0))
@@ -233,7 +239,8 @@ def record(path, seconds, host, names, gyro_topic=None):
         print("  %-14s %d solves" % (n, len(rows[n])))
 
 
-def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None):
+def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None,
+             origin_bad=False):
     """Resolve 'robot forward' from one straight drive, then emit robotToCamera.
 
     WHAT "FORWARD" MEANS HERE, stated plainly because it is a choice and not a
@@ -396,6 +403,15 @@ def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None):
         print("     columns. Re-record the spin to get them - a camera aimed at")
         print("     tags is normally pitched up, and 0 is wrong, not neutral.")
 
+    if origin_bad:
+        print("\n  *** NOT EMITTING JAVA OR JSON. The rotation centre is not on the")
+        print("      robot (see the radius warning above), so x and y in the table")
+        print("      are measured from the wrong point and the numbers to paste")
+        print("      would be wrong by roughly the arc radius. yaw, pitch, roll and")
+        print("      z in the table ARE correct - none of them comes from the")
+        print("      circle fit - so read those and re-record a spin in place.")
+        _gyro_offset(usable, drive, theta, gyro)
+        return out
     print("\nJava:")
     for n, v in out.items():
         print("  // %s" % n)
@@ -717,8 +733,31 @@ def solve(path, origin_height=None, forward_path=None):
         print("\n  (no gyro column in this spin - record with --gyro-topic to get")
         print("   the Pigeon scale/sign check and the gyro-to-forward offset)")
 
+    # --- was this a spin in place, or an arc? -------------------------------
+    # A circle fit recovers each camera's position relative to the centre it
+    # fits, and for an in-place spin that centre IS the robot origin - which is
+    # a DEFINITION, not a measurement: cameras alone can never locate the robot
+    # origin, for any trajectory. Drive an arc and the fit is just as clean, but
+    # every x/y is then measured from the arc's centre. Verified on synthetic
+    # truth with a 1.5 m arc: x correct to 0.1 mm, y wrong by 1.500 m, residual
+    # 1.5 mm, 360 deg swept, every other guard silent.
+    origin_bad = max(r) > SPIN_RADIUS_LIMIT_M
+    if origin_bad:
+        print("\n*** THAT WAS AN ARC, NOT A SPIN IN PLACE.")
+        print("    The fitted radius is %.2f m, further from the cameras than any"
+              % max(r))
+        print("    point on an FRC robot can be (>%.1f m). So the centre above is"
+              % SPIN_RADIUS_LIMIT_M)
+        print("    the arc's centre, not the robot's, and x/y are measured from it")
+        print("    - wrong by roughly the arc radius, mostly SIDEWAYS, since the")
+        print("    centre of an arc sits perpendicular to the direction of travel.")
+        print("    Spin in place instead: that is the one motion whose centre is")
+        print("    the robot origin without trusting any drivetrain number.")
+        print("    (yaw, pitch, roll and z are still correct below.)")
+
     if forward_path:
-        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt, gyro)
+        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt,
+                 gyro, origin_bad)
     else:
         print("\n  No --forward given, so bearing and yaw stay RELATIVE and no")
         print("  robotToCamera can be emitted. Record one straight drive with")

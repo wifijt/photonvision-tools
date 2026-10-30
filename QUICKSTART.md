@@ -438,10 +438,46 @@ the affected cameras so the large percentages do not look like a failure.
 
 **Nothing gets moved for this.** The camera stays bolted where it belongs, and
 on a swerve you don't choose the spin's centre either — it is the kinematic
-centre, which is exactly the point `robotToCamera` must reference. The one
-tempting mistake is driving a wide *arc* instead of spinning in place, to get a
-bigger lever arm: that measures the cameras against the arc's centre, which is
-not the robot origin, so you would gain precision in the wrong frame.
+centre, which is exactly the point `robotToCamera` must reference.
+
+### An arc is not a substitute for spinning in place
+
+It will run, and it will look perfect. With a synthetic 1.5 m arc, one full
+lap, 1.5 mm residual:
+
+| | truth | what the arc returned |
+|---|---|---|
+| `x` | +0.2472 | **+0.2471** — correct to 0.1 mm |
+| `y` | +0.1315 | **−1.3686** — wrong by exactly 1.500 m |
+| `yaw`, `pitch`, `roll`, `z` | | all correct |
+
+Every guard passed: 360° swept, 1.5 mm residual, 0% of radius, and the
+spin/drive yaw cross-check agreed to 0.00°. That cross-check *cannot* catch it,
+because yaw really is right — only `y` is wrong.
+
+**Why.** A circle fit recovers each camera's position relative to *whatever
+centre it fits*. Spinning in place, that centre is the robot origin — and that
+is a **definition, not a measurement**. Cameras can never locate the robot
+origin on their own, for any trajectory: all they ever see is camera positions
+relative to the motion's centre, and camera-to-camera differences. The in-place
+spin is simply the one motion whose centre coincides with the kinematic origin
+*without trusting a single drivetrain number*. An arc's centre sits
+perpendicular to the direction of travel at `v/ω`, so the error lands almost
+entirely **sideways**, and it grows with the arc radius.
+
+**This is now caught**, at a fitted radius over 1.0 m — further from the
+cameras than any point on a legal FRC robot can be, since the 120 in frame
+perimeter caps a 48×30 in frame at a 0.71 m half-diagonal. The solve says
+`THAT WAS AN ARC, NOT A SPIN IN PLACE` and suppresses the pasteable Java and
+JSON, while still printing the table, because yaw/pitch/roll/z in it are good.
+
+**If you genuinely cannot spin in place** — no room, or scrub you don't want —
+there is a way out that is not built: drive **two matched arcs, one left and
+one right at the same commanded radius**. The two arc centres sit at `(0, +R)`
+and `(0, −R)` in the robot frame, so they cancel in the mean and `y` comes back
+exactly. That rests only on the drivetrain being left/right *symmetric*, not on
+its absolute calibration — a much weaker assumption than trusting wheel radius.
+Ask for it if you need it.
 
 ---
 
