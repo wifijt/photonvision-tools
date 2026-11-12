@@ -187,18 +187,34 @@ machine you downloaded on.
 
 The students' laptops are the ones that run these tools, and a locked-down
 school Windows machine usually has no Python and no way to install one that
-needs admin rights. **Anaconda** (or Miniconda, the same thing without the
-bundled packages) installs per-user into your profile and needs no admin. That
-is what it is for here; nothing in this repo cares which Python it gets.
+needs admin rights. **Miniconda** installs per-user into your profile and needs
+no admin, which is what it is for here. Anaconda works identically and is the
+same thing with ~250 scientific packages preinstalled; nothing in this repo
+cares which you have.
 
-Install it from <https://www.anaconda.com/download>, then from the **Anaconda
-Prompt** - not cmd.exe, not PowerShell, until you know the difference:
+Miniconda is the better fit for this repo, and not only for the download size.
+Everything we need comes from pip, and Miniconda ships almost nothing, so pip
+is the only thing that ever writes to site-packages. The pip/conda conflict
+below is a real hazard on Anaconda - where numpy and scipy are already there
+from conda - and close to a non-issue on Miniconda.
+
+Get it from <https://www.anaconda.com/download/success> (the Miniconda
+section), then from the **Anaconda Prompt (miniconda3)** in the Start menu -
+not cmd.exe, not PowerShell, until you know the difference:
 
 ```
 conda create -n photon python=3.11
 conda activate photon
 pip install -r requirements.txt -r requirements-survey.txt
+python setup\check_env.py
 ```
+
+`check_env.py` is the one that matters: pip printing no errors is not the same
+as the imports working, and it reports per tool.
+
+If someone skipped `conda create` and installed into `base`, that works - just
+use `conda activate base`, or nothing at all, since base is active by default.
+`conda env list` shows which environments exist on a given laptop.
 
 ### Four things that cost an evening
 
@@ -209,8 +225,10 @@ this is why, every time.
 
 **Use `pip` only, never `conda install`, for these requirements.** They share
 one site-packages directory and do not track each other, so `conda install
-numpy` on top of a `pip install numpy` half-overwrites the files. The import
-errors that follow look like a corrupted install because that is what it is.
+numpy` on top of a `pip install numpy` half-overwrites the files, and the
+import errors that follow look like a corrupted install because that is what it
+is. Mostly an Anaconda problem - on Miniconda there is nothing of conda's there
+to overwrite - but the rule costs nothing either way.
 
 **It is `python`, not `python3`.** Every command in QUICKSTART.md and
 SESSION.md is written `python3` because that is what a Pi and a Mac want. On
@@ -224,7 +242,7 @@ unhelpful argument error.
 ### Checking it took
 
 ```
-python survey/photon_calib.py --host PI
+python survey\photon_calib.py --host PI
 ```
 
 Anything other than a connection error means Python, the packages and the

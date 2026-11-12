@@ -44,9 +44,11 @@ either can run tonight's tools or tells you which package it is short of.
 - [ ] `check_env.py --session` clean on every laptop
 - [ ] `conda activate photon` understood — a new terminal needs it again
 
-> **Anaconda rule:** once the environment exists, use **`pip` only** for these
+> **conda rule:** once the environment exists, use **`pip` only** for these
 > requirements. `conda install` on top of a `pip install` half-overwrites
-> packages and the import errors look like corruption.
+> packages and the import errors look like corruption. If `conda activate
+> photon` says the environment does not exist, someone installed into `base` -
+> `conda env list` shows what is actually there.
 
 ---
 
