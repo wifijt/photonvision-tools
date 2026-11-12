@@ -90,9 +90,15 @@ def fetch_calibration(host, width=None, height=None, camera=None, timeout=60):
 
 if __name__ == "__main__":
     import argparse
+    # Accept BOTH forms. Every other tool in this repo spells it --host, so a
+    # positional-only host here is a trap: `--host 10.0.0.1` resolved the
+    # literal hostname "--host" and failed with getaddrinfo, naming neither the
+    # flag nor the address.
     ap = argparse.ArgumentParser(
         description="List every camera's calibrations on a PhotonVision host.")
-    ap.add_argument("--host", default="photonvision.local")
+    ap.add_argument("host_pos", nargs="?", metavar="HOST", default=None,
+                    help="the PhotonVision host; --host also works")
+    ap.add_argument("--host", default=None)
     ap.add_argument("--running", nargs=2, type=int, default=None,
                     metavar=("W", "H"),
                     help="the resolution you will actually RUN. A camera with no "
@@ -100,9 +106,10 @@ if __name__ == "__main__":
                          "which looks exactly like a dead camera, so this is the "
                          "only question that matters before a session.")
     a = ap.parse_args()
-    cams = list_calibrations(a.host)
+    host = a.host or a.host_pos or "photonvision.local"
+    cams = list_calibrations(host)
     if not cams:
-        sys.exit("no cameras on %s" % a.host)
+        sys.exit("no cameras on %s" % host)
     bad = 0
     for c in cams:
         print("\ncamera: %s%s" % (c["nickname"], "  (DEACTIVATED)" if c["deactivated"] else ""))
