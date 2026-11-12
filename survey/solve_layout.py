@@ -25,10 +25,25 @@ _ap.add_argument("tag_size", nargs="?", type=float, default=0.1651,
                  help="black-square edge in metres (default 0.1651 = 6.5in)")
 _ap.add_argument("--host", default="photonvision.local",
                  help="fetch calibration from this PhotonVision (default)")
+_ap.add_argument("--ref-tag", type=int, default=None, metavar="ID",
+                 help="tag that becomes the origin. PIN THIS for any layout you "
+                      "intend to reuse: without it the origin is whichever tag "
+                      "happened to be seen most, which can change between surveys "
+                      "of the same room and silently move the whole frame.")
+_ap.add_argument("--ref-height", type=float, default=0.0, metavar="M",
+                 help="metres from the floor up to the reference tag's CENTRE. "
+                      "Shifts every z so the layout's z=0 is the floor instead of "
+                      "a tag. Then calibrate_mount.py takes --origin-height 0.")
+_ap.add_argument("--field", nargs=2, type=float, default=None,
+                 metavar=("LENGTH", "WIDTH"),
+                 help="metres, written into the layout's field block. WPILib uses "
+                      "it for setOrigin(); tools that draw a field use it for the "
+                      "extents. Default 8x8 is a placeholder, not a measurement.")
 _ap.add_argument("--fx", type=float); _ap.add_argument("--fy", type=float)
 _ap.add_argument("--cx", type=float); _ap.add_argument("--cy", type=float)
 _a=_ap.parse_args()
 FR=_a.frames; OUT=_a.out; TAG=_a.tag_size; MAXF=_a.max_frames
+REF_H=_a.ref_height; FIELD=_a.field
 if _a.fx and _a.fy and _a.cx and _a.cy:
     K=np.array([[_a.fx,0,_a.cx],[0,_a.fy,_a.cy],[0,0,1]]); D=np.zeros(8)
     print("using intrinsics from the command line (no distortion model)")
@@ -93,7 +108,26 @@ if len(frames) > MAXF:
           % (len(frames), dict(sorted(_have.items()))))
     _counts = _C(int(t) for f in frames for t in f['ids'])
 
-REF = max(tags, key=lambda t: _counts[t])
+if _a.ref_tag is not None:
+    if _a.ref_tag not in tags:
+        sys.exit('--ref-tag %d was not placed by this survey. Tags here: %s'
+                 % (_a.ref_tag, tags))
+    REF = _a.ref_tag
+    _best = max(_counts[t] for t in tags)
+    if _counts[REF] < 0.25 * _best:
+        print('!! tag %d is the origin but is among the least-seen (%d obs vs %d for'
+              ' the best).' % (REF, _counts[REF], _best))
+        print('   Every other tag is measured FROM it, so the whole frame inherits')
+        print('   its noise. Pin a well-observed tag instead if you have the choice.')
+else:
+    REF = max(tags, key=lambda t: _counts[t])
+    print('!! NO --ref-tag GIVEN, so the origin is whichever tag was seen most.')
+    print('   That is fine for a one-off answer and WRONG for a layout you intend')
+    print('   to reuse: survey the same room again, walk a different path, and a')
+    print('   different tag can win - moving the entire coordinate frame, and with')
+    print('   it every path you ever drew against it. Pin --ref-tag %d to keep this'
+          % max(tags, key=lambda t: _counts[t]))
+    print('   frame.')
 print('frames %d  tags %s  reference %d (%d observations)'
       % (len(frames), tags, REF, _counts[REF]))
 pnp={}
@@ -172,11 +206,20 @@ def R2q(R):
     if R[1,1]>R[2,2]:
         s=np.sqrt(1+R[1,1]-R[0,0]-R[2,2])*2; return ((R[0,2]-R[2,0])/s,(R[0,1]+R[1,0])/s,0.25*s,(R[1,2]+R[2,1])/s)
     s=np.sqrt(1+R[2,2]-R[0,0]-R[1,1])*2; return ((R[1,0]-R[0,1])/s,(R[0,2]+R[2,0])/s,(R[1,2]+R[2,1])/s,0.25*s)
-lay={"tags":[],"field":{"length":8.0,"width":8.0}}
+if FIELD is None:
+    FIELD=[8.0,8.0]
+    print('\n!! no --field given, writing the 8x8 placeholder. Nothing in this repo')
+    print('   reads it, but WPILib uses it for setOrigin() and anything that DRAWS')
+    print('   a field takes its extents from it. Measure your space and pass it.')
+lay={"tags":[],"field":{"length":float(FIELD[0]),"width":float(FIELD[1])}}
+if REF_H:
+    print('\nz shifted by %+.4f m: the layout origin is now the FLOOR under tag %d,'
+          % (REF_H, REF))
+    print('not the tag itself. calibrate_mount.py now takes --origin-height 0.')
 print('\ntag poses (WPILib convention, relative to tag %d):'%REF)
 for t in tags:
     if t not in tT: continue
-    R=Rc@tT[t][:3,:3]@Rc.T; p=Rc@tT[t][:3,3]
+    R=Rc@tT[t][:3,:3]@Rc.T; p=Rc@tT[t][:3,3]+np.array([0,0,REF_H])
     w,x,y,z=R2q(R)
     nz=R@np.array([0,0,1.]); tilt=np.degrees(np.arccos(np.clip(nz@np.array([0,0,1.]),-1,1)))
     print('  tag %-3d  %+7.4f %+7.4f %+7.4f   tilt off vertical %5.2f deg'%(t,p[0],p[1],p[2],tilt))
