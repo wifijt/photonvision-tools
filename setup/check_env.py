@@ -33,6 +33,15 @@ PIP = {
     "cv2": "opencv-python-headless",
 }
 
+# module -> which requirements file carries it, so a miss points at the right
+# one-line fix instead of making someone read three files to find out.
+FILE = {
+    "msgpack": "requirements.txt", "websockets": "requirements.txt",
+    "numpy": "requirements.txt",
+    "ntcore": "requirements-nt.txt", "photonlibpy": "requirements-nt.txt",
+    "scipy": "requirements-survey.txt", "cv2": "requirements-survey.txt",
+}
+
 TOOLS = [
     ("calib/calib_view.py",        ["msgpack", "websockets"],                 True),
     ("calib/charuco_capture.py",   ["msgpack", "websockets"],                 True),
@@ -81,9 +90,10 @@ def main():
         return 0
 
     pips = sorted({PIP.get(m, m) for m in missing})
+    files = sorted({FILE.get(m, "requirements-survey.txt") for m in missing})
     print("\n%d module(s) missing. Install with:" % len(missing))
     print("    pip install %s" % " ".join(pips))
-    print("    or: pip install -r requirements.txt -r requirements-survey.txt")
+    print("    or: pip install %s" % " ".join("-r " + f for f in files))
     print()
     print("If that already 'worked', check these in order - they are the usual")
     print("three, and none of them look like an error:")

@@ -1,20 +1,22 @@
-# photonvision-tools - FIELD SURVEY and MOUNT measurement.
+# photonvision-tools - the PYTHON FIELD LAYOUT SOLVER.
 #
 # Install ON TOP of requirements.txt:
 #   pip install -r requirements.txt -r requirements-survey.txt
 #
+# This pulls in requirements-nt.txt too, so the one-line install every doc in
+# this repo gives you still installs everything. If you want the lighter set -
+# the mount measurement and the live field view, without the solver - install
+# requirements-nt.txt instead and save about 225 MB.
+-r requirements-nt.txt
+
 # Needed by:
-#   survey/capture_corners.py    reads PhotonVision's corners over NetworkTables
-#   survey/solve_layout.py       bundle-adjusts them into an AprilTagFieldLayout
-#   survey/photon_calib.py
-#   mount/calibrate_mount.py     where the cameras are, from a spin
-#   viz/field_viewer.py          live field view
+#   survey/solve_layout.py   bundle-adjusts recorded corners into a layout
 #
-# NOTE - a precondition, not a dependency: capture_corners.py and
-# calibrate_mount.py are NetworkTables CLIENTS and connect to --host as an NT
-# SERVER. On a bench with no roboRIO, PhotonVision's own NT server must be ON
-# (config/set_nt_server.py). On a robot, --host is the ROBORIO, not the camera.
+# scipy is 90 MB and OpenCV is 135 MB, and solve_layout.py is the only thing in
+# the repo that imports either. field_viewer.py will USE cv2 if it is present,
+# to compute field of view from the real distortion model instead of a pinhole
+# approximation - worth having, since pinhole reads 60.1 deg on an OV9281 where
+# the truth is 69.4 and draws blind spots that are not there - but it falls
+# back cleanly when cv2 is absent.
 scipy
 opencv-python-headless
-pyntcore
-photonlibpy

@@ -1,0 +1,25 @@
+# photonvision-tools - NETWORKTABLES tools.
+#
+# Install ON TOP of requirements.txt:
+#   pip install -r requirements.txt -r requirements-nt.txt
+#
+# Needed by:
+#   mount/calibrate_mount.py   record a spin and a drive -> robotToCamera
+#   viz/field_viewer.py        live top-down view of where the cameras are
+#   survey/capture_corners.py  read PhotonVision's corners over NT
+#
+# This is the split that matters on a school laptop. These two packages and
+# their dependencies are about 27 MB; the Python layout solver on top of them
+# is another 225 MB of scipy and OpenCV that none of the tools above import.
+# Measured:
+#
+#   msgpack 0.3 + websockets 1.1 + numpy 27.3     requirements.txt
+#   pyntcore 6.4 + photonlibpy 0.3 + wpimath 17.7 + wpiutil 3.0   this file
+#   scipy 90.6 + cv2 134.8                        requirements-survey.txt
+#
+# NOTE - a precondition, not a dependency: calibrate_mount.py and
+# capture_corners.py are NetworkTables CLIENTS and connect to --host as an NT
+# SERVER. On a bench with no roboRIO, PhotonVision's own NT server must be ON
+# (config/set_nt_server.py). On a robot, --host is the ROBORIO, not the camera.
+pyntcore
+photonlibpy

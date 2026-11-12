@@ -17,9 +17,13 @@ silent failures called out where you meet them.
 Numbered steps, in order.
 
 ```sh
-pip install -r requirements.txt -r requirements-survey.txt
+pip install -r requirements.txt -r requirements-nt.txt
 python3 setup/check_env.py          # did it actually take?
 ```
+
+That covers everything except the Python layout solver, which photonfield has
+largely replaced. Add `-r requirements-survey.txt` for that - it is scipy and
+OpenCV, about 225 MB on top, and nothing else in the repo imports either.
 
 No internet? → [SETUP.md](SETUP.md), section 0b.
 On Windows? → [SETUP.md](SETUP.md), section 0c.

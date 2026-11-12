@@ -27,8 +27,15 @@ answers.
 conda activate photon          # every new terminal, every time
 cd photonvision-tools
 git pull
-pip install -r requirements.txt -r requirements-survey.txt
+pip install -r requirements.txt -r requirements-nt.txt
 ```
+
+> `requirements-nt.txt` is the mount measurement and the live field view.
+> `requirements-survey.txt` adds the Python layout solver - scipy and OpenCV,
+> about 225 MB - which you only need if you are solving a layout on the laptop
+> rather than on a phone. `field_viewer.py` will use OpenCV if it is there, for
+> a field-of-view figure from the real distortion model rather than a pinhole
+> approximation, and falls back cleanly without it.
 
 Then prove it actually took — `pip` printing no errors is not the same as the
 imports working:
