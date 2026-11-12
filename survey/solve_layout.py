@@ -25,6 +25,12 @@ _ap.add_argument("tag_size", nargs="?", type=float, default=0.1651,
                  help="black-square edge in metres (default 0.1651 = 6.5in)")
 _ap.add_argument("--host", default="photonvision.local",
                  help="fetch calibration from this PhotonVision (default)")
+_ap.add_argument("--camera", default=None, metavar="NICKNAME",
+                 help="which camera's calibration to use. REQUIRED once more "
+                      "than one camera is calibrated: two OV9281s hold the same "
+                      "resolutions, so without this the wrong intrinsics can be "
+                      "picked silently and the layout comes out consistent and "
+                      "wrong.")
 _ap.add_argument("--ref-tag", type=int, default=None, metavar="ID",
                  help="tag that becomes the origin. PIN THIS for any layout you "
                       "intend to reuse: without it the origin is whichever tag "
@@ -49,7 +55,7 @@ if _a.fx and _a.fy and _a.cx and _a.cy:
     print("using intrinsics from the command line (no distortion model)")
 else:
     from photon_calib import fetch_calibration
-    K,D,_wh,_nick,_n = fetch_calibration(_a.host)
+    K,D,_wh,_nick,_n = fetch_calibration(_a.host, camera=_a.camera)
     print("calibration from %s: %s @ %dx%d, %d snapshots" % (_a.host,_nick,_wh[0],_wh[1],_n))
     print("  fx %.2f fy %.2f cx %.2f cy %.2f" % (K[0,0],K[1,1],K[0,2],K[1,2]))
     if _n and _n < 50:
