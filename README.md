@@ -9,14 +9,19 @@ exposure and gain.
 
 ## Start here
 
-**Doing this tonight? → [QUICKSTART.md](QUICKSTART.md).** Numbered steps, in
-order, no explanations.
+**Running a session tonight? → [SESSION.md](SESSION.md).** A printable
+checklist for one evening: tick the boxes, with the decision points and the
+silent failures called out where you meet them.
+
+**Want the same ground with explanations? → [QUICKSTART.md](QUICKSTART.md).**
+Numbered steps, in order.
 
 ```sh
 pip install -r requirements.txt -r requirements-survey.txt
 ```
 
-No internet, or a Windows laptop? → [SETUP.md](SETUP.md).
+No internet? → [SETUP.md](SETUP.md), section 0b.
+On Windows? → [SETUP.md](SETUP.md), section 0c.
 
 ## What each folder does
 

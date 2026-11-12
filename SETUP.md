@@ -183,6 +183,55 @@ machine you downloaded on.
 
 ---
 
+## 0c. Windows laptops
+
+The students' laptops are the ones that run these tools, and a locked-down
+school Windows machine usually has no Python and no way to install one that
+needs admin rights. **Anaconda** (or Miniconda, the same thing without the
+bundled packages) installs per-user into your profile and needs no admin. That
+is what it is for here; nothing in this repo cares which Python it gets.
+
+Install it from <https://www.anaconda.com/download>, then from the **Anaconda
+Prompt** - not cmd.exe, not PowerShell, until you know the difference:
+
+```
+conda create -n photon python=3.11
+conda activate photon
+pip install -r requirements.txt -r requirements-survey.txt
+```
+
+### Four things that cost an evening
+
+**`conda activate photon` is per terminal.** Every new window starts outside
+the environment, and the symptom is `ModuleNotFoundError` on a package you
+watched install ten minutes ago. If a command suddenly cannot find `numpy`,
+this is why, every time.
+
+**Use `pip` only, never `conda install`, for these requirements.** They share
+one site-packages directory and do not track each other, so `conda install
+numpy` on top of a `pip install numpy` half-overwrites the files. The import
+errors that follow look like a corrupted install because that is what it is.
+
+**It is `python`, not `python3`.** Every command in QUICKSTART.md and
+SESSION.md is written `python3` because that is what a Pi and a Mac want. On
+Windows inside a conda environment the executable is `python`. `python3` may
+exist, may not, and on some systems silently opens the Microsoft Store.
+
+**Quote camera nicknames.** `--camera "OV9281 (1)"` needs the quotes in every
+shell, but Windows is where people most often drop them and get an
+unhelpful argument error.
+
+### Checking it took
+
+```
+python survey/photon_calib.py --host PI
+```
+
+Anything other than a connection error means Python, the packages and the
+network are all working - you are done here.
+
+---
+
 ## 1. Get the cameras seen (CSI/MIPI only)
 
 **This is the step that eats an evening if you skip it.**

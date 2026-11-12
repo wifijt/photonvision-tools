@@ -192,8 +192,21 @@ python3 calib/charuco_capture.py --host PI --camera "NAME" \
     --width 8 --height 8 --square 1.0 --marker 0.75 --family 4x4 --end
 ```
 
-- Watch the **kept** count, not the shot count.
-- Nothing is written until `--end`. Ctrl-C costs you nothing.
+- Watch the **kept** count, not the shot count. A snapshot where the board was
+  not fully found is discarded silently, so "I took 120" routinely means "it
+  kept 80".
+- **It stops on its own.** Twelve phases, 106 shots — centre, four corners,
+  four edges, far back, close in, fill-in. It names each phase, counts you
+  down, and fires. You move the board; there is no key to press to finish.
+- **`--end` is not a stop command.** It is a decision made at launch about what
+  happens *after* the plan finishes by itself:
+
+  | launched with | after the last shot |
+  |---|---|
+  | `--end` | computes and **STORES** the calibration, **replacing** the old one |
+  | no `--end` | takes all the same shots, writes nothing, old one survives |
+
+- Ctrl-C at any point costs you nothing — nothing is written either way.
 - Repeat per camera.
 
 ---
