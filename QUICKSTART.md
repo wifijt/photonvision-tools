@@ -246,7 +246,7 @@ checked.
 Upload:
 
 ```sh
-curl -F "data=@layout.json" http://PI:5800/api/settings/apriltagFieldLayout
+curl -F "data=@layout.json" http://PI:5800/api/settings/aprilTagFieldLayout
 ```
 
 ### The reference tag is 0,0,0 — and it is a TAG, not the floor
