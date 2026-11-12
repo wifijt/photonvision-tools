@@ -179,7 +179,20 @@ def q2R(w, x, y, z):
                      [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
 
 
-def record(path, seconds, host, names, gyro_topic=None):
+# What each recording is for, and what the robot must be doing during it. The
+# prompt used to say "rotate the rig about a fixed point now" for BOTH, so the
+# second recording told you to spin when it needed a straight drive - and a
+# second spin recorded as a drive does not fail, it silently defines "robot
+# forward" as whatever direction the robot happened to drift in.
+MOTIONS = {
+    "spin":  ("SPIN IN PLACE",
+              "two full turns, slowly, about a FIXED point, tags in view the whole time"),
+    "drive": ("DRIVE STRAIGHT",
+              "2-3 m, no steering input at all, tags in view the whole time"),
+}
+
+
+def record(path, seconds, host, names, gyro_topic=None, motion="spin"):
     import ntcore
     from photonlibpy.photonCamera import PhotonCamera
     inst = ntcore.NetworkTableInstance.getDefault()
@@ -201,7 +214,12 @@ def record(path, seconds, host, names, gyro_topic=None):
         print("   the Pigeon scale check and the gyro-to-forward offset)")
     rows = {n: [] for n in names}
     seen = {n: set() for n in names}
-    print("RECORDING %.0fs - rotate the rig about a fixed point now" % seconds, flush=True)
+    what, how = MOTIONS.get(motion, MOTIONS["spin"])
+    for n in (3, 2, 1):
+        print("  %s in %d ..." % (what, n), flush=True)
+        time.sleep(1.0)
+    print("\n>>> %s - NOW, for %.0f seconds" % (what, seconds), flush=True)
+    print("    %s\n" % how, flush=True)
     t0 = time.time(); last = 0
     while time.time() - t0 < seconds:
         for n, c in cams.items():
@@ -842,6 +860,13 @@ if __name__ == "__main__":
                          "Resolves the single shared unknown - where robot forward "
                          "points - and turns the relative answers into a full "
                          "robotToCamera per camera.")
+    ap.add_argument("--motion", choices=sorted(MOTIONS), default=None,
+                    help="which recording this is. 'spin' is two turns in place; "
+                         "'drive' is one straight run. It only changes what the "
+                         "prompt tells you to do, but doing the wrong one is not "
+                         "an error the solve can catch - a second spin recorded "
+                         "as a drive just defines robot forward as whichever way "
+                         "the robot drifted. Guessed from the filename if omitted.")
     ap.add_argument("--gyro-topic", default=None, metavar="TOPIC",
                     help="full NT topic of the robot's heading as a number, e.g. "
                          "/SmartDashboard/Gyro. Recorded alongside the cameras so "
@@ -856,6 +881,11 @@ if __name__ == "__main__":
     a = ap.parse_args()
     names = [c.strip() for c in a.cameras.split(",")]
     if a.mode == "record":
-        record(a.file, a.seconds, a.host, names, a.gyro_topic)
+        motion = a.motion
+        if motion is None:
+            motion = "drive" if "drive" in a.file.lower() else "spin"
+            print("(--motion not given; '%s' guessed from the filename %r)"
+                  % (motion, a.file))
+        record(a.file, a.seconds, a.host, names, a.gyro_topic, motion)
     else:
         solve(a.file, a.origin_height, a.forward)
