@@ -18,6 +18,7 @@ Numbered steps, in order.
 
 ```sh
 pip install -r requirements.txt -r requirements-survey.txt
+python3 setup/check_env.py          # did it actually take?
 ```
 
 No internet? → [SETUP.md](SETUP.md), section 0b.
@@ -31,7 +32,7 @@ On Windows? → [SETUP.md](SETUP.md), section 0c.
 | `survey/` | **Build a field layout from tags you can see.** For a practice field, or tags on a wall. Produces an `AprilTagFieldLayout` you upload to PhotonVision. |
 | `mount/` | **Find where the cameras are on the robot**, by spinning it, instead of with a tape measure. This is `robotToCamera`. |
 | `monitor/` | **Notice when a camera has moved.** Two cameras check each other; needs no field and no robot. |
-| `setup/` | Get CSI/MIPI cameras recognised at all. USB cameras need none of this. |
+| `setup/` | Get CSI/MIPI cameras recognised at all. USB cameras need none of this. Also `check_env.py`, which says whether a laptop can run each tool. |
 | `config/` | Change PhotonVision settings from a script instead of clicking. |
 | `viz/` | Watch the robot's position on a field, live. |
 | `thermal/` | Does the case overheat? |

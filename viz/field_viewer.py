@@ -40,7 +40,12 @@ try:
     from photonlibpy.packet import Packet
     from photonlibpy.targeting.photonPipelineResult import PhotonPipelineResult
 except ImportError as e:
-    sys.exit("need: pip install numpy robotpy-photonlibpy  (%s)" % e)
+    # NOT "robotpy-photonlibpy" - that name 404s on PyPI, so the old hint sent
+    # anyone who hit this straight into a second, more confusing failure. It is
+    # photonlibpy, and ntcore comes from pyntcore.
+    sys.exit("need: pip install numpy pyntcore photonlibpy\n"
+             "  or: pip install -r requirements.txt -r requirements-survey.txt\n"
+             "  (%s)" % e)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".layout_cache.json")

@@ -30,7 +30,18 @@ git pull
 pip install -r requirements.txt -r requirements-survey.txt
 ```
 
+Then prove it actually took — `pip` printing no errors is not the same as the
+imports working:
+
+```sh
+python3 setup/check_env.py --session
+```
+
+It reports per **tool** and exits non-zero if anything is missing, so a laptop
+either can run tonight's tools or tells you which package it is short of.
+
 - [ ] pulled on every laptop
+- [ ] `check_env.py --session` clean on every laptop
 - [ ] `conda activate photon` understood — a new terminal needs it again
 
 > **Anaconda rule:** once the environment exists, use **`pip` only** for these
