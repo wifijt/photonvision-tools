@@ -240,7 +240,7 @@ def record(path, seconds, host, names, gyro_topic=None):
 
 
 def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None,
-             origin_bad=False):
+             origin_bad=False, fit_bad=()):
     """Resolve 'robot forward' from one straight drive, then emit robotToCamera.
 
     WHAT "FORWARD" MEANS HERE, stated plainly because it is a choice and not a
@@ -403,6 +403,17 @@ def _forward(names, spin, r, cx, cy, zs, tilt, K, path, have_tilt, gyro=None,
         print("     columns. Re-record the spin to get them - a camera aimed at")
         print("     tags is normally pitched up, and 0 is wrong, not neutral.")
 
+    if fit_bad and not origin_bad:
+        print("\n  *** NOT EMITTING JAVA OR JSON. The circle fit on %s is worse"
+              % ", ".join(fit_bad))
+        print("      than %.0f mm (see FIT QUALITY above), and that residual IS the"
+              % RESID_LIMIT_MM)
+        print("      error bar on x and y - so the table above is right to within")
+        print("      that, and a block formatted for pasting would imply a")
+        print("      precision the spin did not have. yaw, pitch, roll and z are")
+        print("      unaffected. Re-spin about a genuinely fixed axis.")
+        _gyro_offset(usable, drive, theta, gyro)
+        return out
     if origin_bad:
         print("\n  *** NOT EMITTING JAVA OR JSON. The rotation centre is not on the")
         print("      robot (see the radius warning above), so x and y in the table")
@@ -755,14 +766,6 @@ def solve(path, origin_height=None, forward_path=None):
         print("    the robot origin without trusting any drivetrain number.")
         print("    (yaw, pitch, roll and z are still correct below.)")
 
-    if forward_path:
-        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt,
-                 gyro, origin_bad)
-    else:
-        print("\n  No --forward given, so bearing and yaw stay RELATIVE and no")
-        print("  robotToCamera can be emitted. Record one straight drive with")
-        print("  `record`, then pass it as --forward.")
-
     # Gate on the ABSOLUTE residual, not on its ratio to the radius.
     #
     # This used to refuse whenever the residual passed 15% of the radius, on the
@@ -817,6 +820,13 @@ def solve(path, origin_height=None, forward_path=None):
         print("    usefully tape 10 mm from a pivot to a lens - so the spin/drive")
         print("    yaw cross-check above is your only outside confirmation.")
 
+    if forward_path:
+        _forward(names, data, r, cx, cy, zs, tilt, K, forward_path, have_tilt,
+                 gyro, origin_bad, bad)
+    else:
+        print("\n  No --forward given, so bearing and yaw stay RELATIVE and no")
+        print("  robotToCamera can be emitted. Record one straight drive with")
+        print("  `record`, then pass it as --forward.")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
