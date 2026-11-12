@@ -55,7 +55,19 @@ else:
     if _n and _n < 50:
         print("  WARNING: only %d calibration snapshots - the map will inherit that error" % _n)
 h=TAG/2
-# verified empirically: PV corners pair as TL,TR,BR,BL in an X-right / Y-up / Z-out tag frame
+# PV corners pair as BL,BR,TR,TL in OpenCV's standard planar-target frame:
+# X right, Y DOWN, Z INTO the tag face. That is also AprilTag's own corner order,
+# counter-clockwise from the bottom-left in image coordinates.
+#
+# This comment used to say TL,TR,BR,BL in an X-right / Y-UP / Z-out frame, which
+# is exactly reversed, and it is not a harmless slip: taken at face value it makes
+# Rc below map "up" to WPILib -Z, i.e. Z pointing down. Rc is right - confirmed on
+# real layouts, where z IS height - so the description was the broken half.
+# Anyone writing a test against the stated convention gets a layout whose tag
+# heights come back mirrored about the reference tag, and every distance check
+# still passes, because a 180 deg flip about a horizontal axis preserves all of
+# them. What it does NOT preserve is the sense of yaw, which is how a frame error
+# like this actually bites: vision counts heading one way, the Pigeon the other.
 OBJ=np.array([[-h,h,0],[h,h,0],[h,-h,0],[-h,-h,0]],dtype=np.float64)
 def rt2T(r,t):
     T=np.eye(4); T[:3,:3]=cv2.Rodrigues(r.reshape(3,1))[0]; T[:3,3]=t; return T
