@@ -43,9 +43,18 @@ except ImportError as e:
     # NOT "robotpy-photonlibpy" - that name 404s on PyPI, so the old hint sent
     # anyone who hit this straight into a second, more confusing failure. It is
     # photonlibpy, and ntcore comes from pyntcore.
-    sys.exit("need: pip install numpy pyntcore photonlibpy\n"
-             "  or: pip install -r requirements.txt -r requirements-survey.txt\n"
-             "  (%s)" % e)
+    # "python -m pip", not "pip": under conda a bare pip is routinely a
+    # different environment's pip than the python about to run this, so the
+    # install reports success and the import still fails.
+    sys.exit("need: python -m pip install -r requirements.txt -r requirements-nt.txt\n"
+             "  or: python -m pip install numpy pyntcore photonlibpy\n"
+             "  (%s)\n"
+             "\nIf that module imports in a REPL but not here, you have two\n"
+             "interpreters. Run it as:\n"
+             "    python %s\n"
+             "not python3, and not as an executable - the shebang ignores\n"
+             "whichever environment you activated."
+             % (e, sys.argv[0]))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".layout_cache.json")
