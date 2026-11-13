@@ -18,13 +18,18 @@ Every value below has a measured reason, given in WHY. Run with --explain to
 print them without changing anything.
 
 OPTIONS
-    --host          the PhotonVision box ('pi', or an address) whose pipeline
-                    is rewritten  (default photonvision.local)
+    --host          the PhotonVision box whose pipeline is rewritten: 'pi'
+                    ($FRC_PI), '.12' with a team number, or an address
+                    (default pi)
     --cameras       comma-separated nicknames
     --brightness    override the baseline cameraBrightness for your camera
     --dry-run       print what would change and write nothing
     --explain       print the reasoning and exit
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, sys, time
 
 try:
@@ -165,15 +170,18 @@ async def apply(host, camera_filter, dry_run):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
-                   help="the PhotonVision box ('pi', or an address) whose pipeline is rewritten")
+    p.add_argument("--host", default="pi",
+                   help="the PhotonVision box whose pipeline is rewritten: 'pi' "
+                        "($FRC_PI), '.12' with a team number, or an address")
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
     p.add_argument("--brightness", type=float, default=None,
                    help="override the baseline cameraBrightness for your camera")
     p.add_argument("--dry-run", action="store_true",
                    help="print what would change and write nothing")
     p.add_argument("--explain", action="store_true", help="print the reasoning and exit")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     if a.explain:
         for k, (v, why) in BASELINE.items():
             print("%s = %s" % (k, v))

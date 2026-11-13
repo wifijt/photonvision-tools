@@ -35,8 +35,8 @@ RUN IT UNDER REAL LOAD. An idle Pi in a sealed case proves nothing. Both cameras
 should be running their normal pipelines for the whole test.
 
 OPTIONS
-    --host        the PhotonVision box ('pi', or an address)  (default
-                  photonvision.local)
+    --host        the PhotonVision box: 'pi' ($FRC_PI), '.12' with a team
+                  number, or an address  (default pi)
     --port        PhotonVision's web port  (default 5800)
     --minutes     how long to run the soak  (default 30.0)
     --ambient     room temperature in C - lets the test report the ambient at
@@ -44,6 +44,10 @@ OPTIONS
     --log FILE    write a CSV row per sample here
     --quiet       only print the summary
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, json, math, statistics as st, sys, time
 
 try:
@@ -229,8 +233,9 @@ def report(run, ambient):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
-                   help="the PhotonVision box ('pi', or an address)")
+    p.add_argument("--host", default="pi",
+                   help="the PhotonVision box: 'pi' ($FRC_PI), '.12' with a team "
+                        "number, or an address")
     p.add_argument("--port", type=int, default=5800,
                    help="PhotonVision's web port")
     p.add_argument("--minutes", type=float, default=30.0,
@@ -242,7 +247,9 @@ def main():
                    help="write a CSV row per sample here")
     p.add_argument("--quiet", action="store_true",
                    help="only print the summary")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
 
     run = Run()
     log = open(a.log, "a", buffering=1) if a.log else None

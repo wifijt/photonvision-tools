@@ -16,13 +16,18 @@ Always pull them from the box that is actually running.
 
 OPTIONS
     host_pos HOST    the PhotonVision host; --host also works
-    --host           the PhotonVision box ('pi', or an address). The
-                     calibration lives there, not on the roboRIO
+    --host           the PhotonVision box: 'pi' ($FRC_PI), '.12' with a team
+                     number, or an address. The calibration lives THERE, not on
+                     the roboRIO
     --running W H    the resolution you will actually RUN. A camera with no
                      calibration at its active resolution publishes NOTHING,
                      which looks exactly like a dead camera, so this is the
                      only question that matters before a session.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import io, json, sqlite3, tempfile, urllib.request, zipfile, os
 import numpy as np
 import sys
@@ -108,15 +113,20 @@ if __name__ == "__main__":
     ap.add_argument("host_pos", nargs="?", metavar="HOST", default=None,
                     help="the PhotonVision host; --host also works")
     ap.add_argument("--host", default=None,
-                    help="the PhotonVision box ('pi', or an address). The calibration lives there, not on the roboRIO")
+                    help="the PhotonVision box: 'pi' ($FRC_PI), '.12' with a team "
+                         "number, or an address. The calibration lives THERE, "
+                         "not on the roboRIO")
     ap.add_argument("--running", nargs=2, type=int, default=None,
                     metavar=("W", "H"),
                     help="the resolution you will actually RUN. A camera with no "
                          "calibration at its active resolution publishes NOTHING, "
                          "which looks exactly like a dead camera, so this is the "
                          "only question that matters before a session.")
+    preflight.add_team_argument(ap)
     a = ap.parse_args()
-    host = a.host or a.host_pos or "photonvision.local"
+    # Resolve AFTER the fallback, not before: the host can arrive positionally,
+    # and a positional 'pi' deserves the same treatment as --host pi.
+    host = preflight.resolve_host(a.host or a.host_pos or "pi", a.team)
     cams = list_calibrations(host)
     if not cams:
         sys.exit("no cameras on %s" % host)

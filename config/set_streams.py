@@ -66,10 +66,11 @@ OPTIONS
     --both               raw + processed
     --status             show current state
     --daemon             follow NT, let the robot decide
-    --host               the PhotonVision box ('pi', or an address)  (default
-                         photonvision.local)
+    --host               the PhotonVision box: 'pi' ($FRC_PI), '.12' with a
+                         team number, or an address  (default pi)
     --table              NT table for --daemon  (default PhotonStreams)
-    --nt-server          NT server (default: --host)
+    --nt-server          NT server for --daemon: 'rio' on a robot (default:
+                         --host)
     --camera             act on this camera only (default: all of them)
     --measure            also measure latency/fps after applying
     --publish-metrics    daemon: also publish per-camera fps/latencyMs. OFF by
@@ -79,6 +80,10 @@ OPTIONS
                          too long. Only enable if nothing else is reading the
                          websocket at the same time.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse
 import asyncio
 import re
@@ -291,10 +296,12 @@ def main():
     g.add_argument("--both", action="store_true", help="raw + processed")
     g.add_argument("--status", action="store_true", help="show current state")
     g.add_argument("--daemon", action="store_true", help="follow NT, let the robot decide")
-    ap.add_argument("--host", default="photonvision.local",
-                    help="the PhotonVision box ('pi', or an address)")
+    ap.add_argument("--host", default="pi",
+                    help="the PhotonVision box: 'pi' ($FRC_PI), '.12' with a team "
+                         "number, or an address")
     ap.add_argument("--table", default="PhotonStreams", help="NT table for --daemon")
-    ap.add_argument("--nt-server", default=None, help="NT server (default: --host)")
+    ap.add_argument("--nt-server", default=None,
+                    help="NT server for --daemon: 'rio' on a robot (default: --host)")
     ap.add_argument("--camera", default=None,
                     help="act on this camera only (default: all of them)")
     ap.add_argument("--measure", action="store_true",
@@ -306,7 +313,11 @@ def main():
                          "corrupted a sweep badly enough to pick an exposure 4x "
                          "too long. Only enable if nothing else is reading the "
                          "websocket at the same time.")
+    preflight.add_team_argument(ap)
     a = ap.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
+    if a.nt_server:
+        a.nt_server = preflight.resolve_host(a.nt_server, a.team)
 
     if a.daemon:
         return daemon(a.host, a.table, a.nt_server, a.camera, a.publish_metrics)

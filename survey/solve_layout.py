@@ -18,8 +18,9 @@ OPTIONS
     out                     output AprilTagFieldLayout json
     tag_size                black-square edge in metres (default 0.1651 =
                             6.5in)  (default 0.1651)
-    --host                  fetch calibration from this PhotonVision (default)
-                            (default photonvision.local)
+    --host                  fetch the calibration from this PhotonVision: 'pi'
+                            ($FRC_PI), '.12' with a team number, or an address
+                            (default pi)
     --camera NICKNAME       which camera's calibration to use. REQUIRED once
                             more than one camera is calibrated: two OV9281s
                             hold the same resolutions, so without this the
@@ -44,6 +45,10 @@ OPTIONS
     --cx                    principal point in px (x)
     --cy                    principal point in px (y)
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import sys,json,numpy as np,cv2
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
@@ -58,8 +63,9 @@ _ap.add_argument("--max-frames", type=int, default=250,
 _ap.add_argument("out", help="output AprilTagFieldLayout json")
 _ap.add_argument("tag_size", nargs="?", type=float, default=0.1651,
                  help="black-square edge in metres (default 0.1651 = 6.5in)")
-_ap.add_argument("--host", default="photonvision.local",
-                 help="fetch calibration from this PhotonVision (default)")
+_ap.add_argument("--host", default="pi",
+                 help="fetch the calibration from this PhotonVision: 'pi' "
+                      "($FRC_PI), '.12' with a team number, or an address")
 _ap.add_argument("--camera", default=None, metavar="NICKNAME",
                  help="which camera's calibration to use. REQUIRED once more "
                       "than one camera is calibrated: two OV9281s hold the same "
@@ -86,7 +92,9 @@ _ap.add_argument("--fx", type=float,
 _ap.add_argument("--cx", type=float,
                  help="principal point in px (x)"); _ap.add_argument("--cy", type=float,
                                                                      help="principal point in px (y)")
+preflight.add_team_argument(_ap)
 _a=_ap.parse_args()
+_a.host = preflight.resolve_host(_a.host, _a.team)
 FR=_a.frames; OUT=_a.out; TAG=_a.tag_size; MAXF=_a.max_frames
 REF_H=_a.ref_height; FIELD=_a.field
 if _a.fx and _a.fy and _a.cx and _a.cy:

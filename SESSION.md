@@ -27,8 +27,10 @@ export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459
 export FRC_PI=10.54.59.12         # Windows:  set FRC_PI=10.54.59.12
 ```
 
-Every tool then takes `--host rio` or `--host pi` and works out the rest. Use
-`setx` instead of `set` on Windows to make it stick across terminals.
+Every tool then takes `--host rio` or `--host pi` and works out the rest — all
+13 of them, plus `--host .12` for any last octet and `--team` to override
+`$FRC_TEAM` for one command. Use `setx` instead of `set` on Windows to make it
+stick across terminals.
 
 Check both boxes before anything else:
 
@@ -105,7 +107,12 @@ sudo systemctl restart photonvision
 > | tool | `--host` | why |
 > |---|---|---|
 > | `photon_calib`, `calib_view`, `charuco_capture` | **`pi`** | they read PhotonVision's own web server, port 5800 |
+> | `vision_stddev`, `apply_baseline`, `heat_test` | **`pi`** | same web server |
+> | `solve_layout` | **`pi`** | it fetches the intrinsics the solve needs |
+> | `csi_cameras` | **localhost** | it edits `/boot` config, so it runs *on* the Pi |
 > | `calibrate_mount`, `photontune` | **`rio`** | they read NetworkTables |
+> | `capture_corners`, `camera_drift` | **`rio`** on a robot, `pi` on a bench | NT, wherever the server is |
+> | `set_streams` | **`pi`**, plus `--nt-server rio` for `--daemon` | it writes settings over the websocket and listens on NT |
 > | `field_viewer` | **`rio`** plus `--pv-host pi` | poses come over NT, the FOV cones come from the calibration |
 >
 > Pointing an NT tool at the Pi is the classic way to lose an hour: it sits

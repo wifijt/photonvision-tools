@@ -55,10 +55,16 @@ OPTIONS
     --set SENSORS    comma-separated, in connector order: --set ov9281,ov9281
     --verify         after a reboot: did it work
     --expect         how many cameras --verify requires
-    --host           PhotonVision host (default localhost)  (default 127.0.0.1)
+    --host           PhotonVision host. Defaults to localhost because this tool
+                     edits /boot config and normally runs ON the Pi  (default
+                     127.0.0.1)
     --port           PhotonVision's web port, for --verify  (default 5800)
     --dry-run        print the config.txt change and write nothing
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, glob, json, os, re, shutil, subprocess, sys, time
 
 CONFIG = "/boot/firmware/config.txt"
@@ -353,12 +359,16 @@ def main():
                    help="comma-separated, in connector order: --set ov9281,ov9281")
     p.add_argument("--verify", action="store_true", help="after a reboot: did it work")
     p.add_argument("--expect", type=int, default=0, help="how many cameras --verify requires")
-    p.add_argument("--host", default="127.0.0.1", help="PhotonVision host (default localhost)")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="PhotonVision host. Defaults to localhost because this "
+                        "tool edits /boot config and normally runs ON the Pi")
     p.add_argument("--port", type=int, default=5800,
                    help="PhotonVision's web port, for --verify")
     p.add_argument("--dry-run", action="store_true",
                    help="print the config.txt change and write nothing")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     if a.set:
         write_config(a)
     elif a.verify:

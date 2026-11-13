@@ -81,7 +81,30 @@ cd photonvision-tools
 pip install -r requirements.txt -r requirements-survey.txt
 ```
 
-No internet? See [SETUP.md](SETUP.md), section 0b.
+No internet? See [SETUP.md](SETUP.md), section 0c for Windows, 0b for offline.
+
+### Then say the team number once, per terminal
+
+```sh
+export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459  (setx to keep it)
+export FRC_PI=10.54.59.12         # the Pi running PhotonVision
+```
+
+Every tool then takes `--host rio` or `--host pi` and works the address out —
+`rio` is `10.TE.AM.2`, `pi` is `$FRC_PI`. Nobody types an IP under pressure, and
+nobody gets the roboRIO and the Pi the wrong way round, which is the single most
+expensive mistake in this repo.
+
+### And check, before anyone walks to the robot
+
+```sh
+python3 preflight.py
+```
+
+One second, stdlib only, and it answers three questions that have each eaten an
+evening: is the Python running this script the one you installed into, is this
+laptop actually on the robot network, and do the roboRIO and the Pi answer. See
+[README.md](README.md#preflightpy--say-the-team-number-once-never-type-an-address).
 
 ---
 

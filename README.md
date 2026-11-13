@@ -19,6 +19,7 @@ Numbered steps, in order.
 ```sh
 pip install -r requirements.txt -r requirements-nt.txt
 python3 setup/check_env.py          # did it actually take?
+python3 preflight.py                # can this laptop reach the robot?
 ```
 
 That covers everything except the Python layout solver, which photonfield has
@@ -386,6 +387,71 @@ always for the unrotated sensor image.
 - `solvePNPEnabled` with no calibration for the active resolution makes PhotonVision throw
   a `NullPointerException` every frame and emit **nothing at all**, rather than degrading
   to 2D. Turn 3D off before switching to an uncalibrated resolution.
+
+## preflight.py — say the team number once, never type an address
+
+Three of the four evenings this repo exists because of were lost to something
+preflight checks in under a second. It is **stdlib only** on purpose: it has to
+work on a machine where nothing is installed yet, since diagnosing exactly that
+is half its job.
+
+```sh
+export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459  (setx to keep it)
+export FRC_PI=10.54.59.12         # where PhotonVision actually lives
+python3 preflight.py
+```
+
+```
+interpreter:
+    /Users/you/miniconda3/envs/photon/bin/python3
+    Python 3.12.4
+
+conda: running the activated environment (or none)
+
+local address: 10.54.59.137
+
+team 5459 -> 10.54.59.x   (roboRIO 10.54.59.2, radio 10.54.59.1)
+
+rio = 10.54.59.2             :5810  OK           (connected)
+pi = 10.54.59.12             :5800  UNREACHABLE  (timed out)
+```
+
+Name other boxes as `host[:port]` — `python3 preflight.py pi:5800 rio:1735`.
+
+### What it catches
+
+| failure | how it used to present |
+|---|---|
+| a script launched outside its conda env | `import ntcore` fails while the same import works in a REPL two inches away |
+| the laptop is not on the robot network | the tool connects to nothing and records zero rows, looking like a camera fault |
+| a missing package imported deep in a function | the error arrives a hundred lines after argument parsing, robot already in position |
+
+The conda one is worth spelling out: `conda activate` sets `CONDA_PREFIX` **in
+the shell**. A script started through its shebang, a Windows file association or
+an editor's own interpreter inherits that variable while running a *different*
+Python. `sys.prefix` is the one actually executing, so when the two disagree the
+activated environment is not the one running — and nothing else says so.
+
+### Every tool takes a role instead of an address
+
+`--team` (defaulting to `$FRC_TEAM`) is on all 13 tools that take a `--host`,
+and the host itself accepts a role:
+
+| you type | you get | |
+|---|---|---|
+| `--host rio` | `10.TE.AM.2` | the NT server once the robot is on |
+| `--host radio` | `10.TE.AM.1` | |
+| `--host pi` | `$FRC_PI`, else `photonvision.local` | PhotonVision's web server, port 5800 |
+| `--host .12` | `10.TE.AM.12` | any last octet |
+| `--host 10.54.59.12` | itself | addresses still work |
+
+The 10.TE.AM rule is **zero-pad-and-split**, not division: 5459 → `10.54.59`,
+123 → `10.1.23`, 9 → `10.0.9`. Doing it arithmetically gets short team numbers
+wrong, which is the kind of bug that surfaces at the one event where you borrow
+a laptop from another team.
+
+A role that needs a team number and cannot find one says so and exits, rather
+than guessing and timing out against somebody else's robot.
 
 ## Requirements
 
