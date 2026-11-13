@@ -1050,7 +1050,13 @@ resize(); tick(); setInterval(tick,60);
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local", help="PhotonVision / NT server")
+    p.add_argument("--host", default="photonvision.local",
+                   help="the NetworkTables server. With a robot on that is the "
+                        "roboRIO, NOT the Pi - PhotonVision is only the NT server "
+                        "when runNTServer is on.")
+    p.add_argument("--pv-host", default=None, metavar="HOST",
+                   help="PhotonVision's own address, when it is not the NT server. "
+                        "Only the camera FOV cones need it; poses come over NT.")
     p.add_argument("--port", type=int, default=8077)
     p.add_argument("--table", default="photonvision")
     p.add_argument("--trail", type=int, default=400, help="trail points kept per camera")
@@ -1068,8 +1074,9 @@ def main():
     a = p.parse_args()
 
     print("field viewer")
-    print("  reading calibration from %s ..." % a.host)
-    STATE["fov"] = fetch_fov(a.host)
+    pv = a.pv_host or a.host
+    print("  reading calibration from %s ..." % pv)
+    STATE["fov"] = fetch_fov(pv)
 
     if not a.no_field and a.field_long and a.field_short:
         STATE["field"] = dict(

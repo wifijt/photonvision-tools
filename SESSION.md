@@ -12,8 +12,18 @@ it needs, the layout gives it multi-tag solves to score on, and the spin is
 only as good as the detections underneath it. Doing these out of order does not
 error — it produces confident wrong numbers.
 
-Fill this in as you go. `RIO` below = the roboRIO's IP address.
-Write it here once: `RIO = ______________________`
+Fill these in as you go. **Two different boxes, and they are not
+interchangeable.**
+
+- `PI` = the Raspberry Pi running PhotonVision. Everything that reads a
+  camera, a calibration or the live image talks to this, on port 5800.
+- `RIO` = the roboRIO. It is the NetworkTables server once the robot is on,
+  so everything that reads a robot pose or the gyro talks to this.
+
+```
+PI  = ______________________
+RIO = ______________________
+```
 
 ---
 
@@ -73,16 +83,27 @@ sudo systemctl restart photonvision
 ```
 
 > Two NT servers on one network fight, and the symptom is **silence**, not an
-> error. On the robot the roboRIO is the server — so **every tool's `--host` is
-> the roboRIO, not the Pi.** Pointing `--host` at the Pi is the single most
-> common way to lose an hour: the tools sit there seeing nothing and look broken.
+> error. On the robot the roboRIO is the server.
+>
+> **That decides each tool's `--host`, and the answer is not the same every
+> time:**
+>
+> | tool | `--host` | why |
+> |---|---|---|
+> | `photon_calib`, `calib_view`, `charuco_capture` | **`$PI`** | they read PhotonVision's own web server, port 5800 |
+> | `calibrate_mount`, `photontune` | **`$RIO`** | they read NetworkTables |
+> | `field_viewer` | **`$RIO`** plus `--pv-host $PI` | poses come over NT, the FOV cones come from the calibration |
+>
+> Pointing an NT tool at the Pi is the classic way to lose an hour: it sits
+> there seeing nothing and looks broken. Pointing a camera tool at the roboRIO
+> fails immediately instead, which is at least honest.
 
 ---
 
 ## 2. Calibration — 60 seconds, then decide
 
 ```sh
-python3 survey/photon_calib.py --host $RIO --running 1280 800
+python3 survey/photon_calib.py --host $PI --running 1280 800
 ```
 
 Change `1280 800` to whatever resolution you will **actually run**.
@@ -113,9 +134,9 @@ Read the output:
 ### Only if you need to calibrate
 
 ```sh
-python3 calib/calib_view.py --host $RIO            # mirrored, so left is left
-python3 calib/charuco_capture.py --host $RIO --camera "NAME" --dry-run
-python3 calib/charuco_capture.py --host $RIO --camera "NAME" \
+python3 calib/calib_view.py --host $PI            # mirrored, so left is left
+python3 calib/charuco_capture.py --host $PI --camera "NAME" --dry-run
+python3 calib/charuco_capture.py --host $PI --camera "NAME" \
     --width 8 --height 8 --square 1.0 --marker 0.75 --family 4x4 --end
 ```
 
@@ -212,7 +233,7 @@ changes which command you run.
 ### Check for flicker FIRST — 30 seconds
 
 ```sh
-python3 calib/calib_view.py --host $RIO
+python3 calib/calib_view.py --host $PI
 ```
 
 Watch the image for a few seconds. **Whole-frame brightness pulsing** — not
@@ -371,7 +392,8 @@ none of those come from the circle fit. Only x and y are affected.
 
 None of these produce an error. All of them produce wrong answers.
 
-1. **`--host` pointed at the Pi instead of the roboRIO.** Tools see nothing.
+1. **`--host` pointed at the wrong box.** The NT tools want the roboRIO, the
+   camera tools want the Pi. See the table in step 1.
 2. **Calibrated at a different resolution than you run.** Camera publishes
    nothing at all.
 3. **Surveying before the field is finished**, or nudging a tag afterwards.
