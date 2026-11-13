@@ -1084,7 +1084,11 @@ def main():
                    help="how often to write a log row (default 10)")
     p.add_argument("--lock-extrinsic", action="store_true",
                    help="use the cached camera-to-camera transform and stop re-learning it")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
+    if getattr(a, "pv_host", None):
+        a.pv_host = preflight.resolve_host(a.pv_host, a.team)
     preflight.require_host(a.host, 5810, "the NetworkTables server")
 
     print("field viewer")

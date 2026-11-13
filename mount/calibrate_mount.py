@@ -996,7 +996,9 @@ if __name__ == "__main__":
                          "layout's Z=0. A surveyed bench layout anchors Z to a TAG, so "
                          "measure that tag's height once. The official FRC field layout "
                          "already uses true heights - pass 0 there.")
+    preflight.add_team_argument(ap)
     a = ap.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     names = [c.strip() for c in a.cameras.split(",")]
     if a.mode == "record":
         motion = a.motion

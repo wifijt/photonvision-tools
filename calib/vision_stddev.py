@@ -327,7 +327,9 @@ def main():
     p.add_argument("--seconds", type=int, default=120)
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
     p.add_argument("--json", metavar="FILE", help="also write the raw summaries")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     preflight.require_host(a.host, getattr(a, "port", 5800), "PhotonVision's web server")
     only = {c.strip().lower() for c in a.cameras.split(",")} if a.cameras else None
     stations = asyncio.run(collect(a.host, a.port, a.seconds, only))

@@ -259,7 +259,9 @@ def main():
                    help="walk the plan, take nothing, change nothing")
     p.add_argument("--end", action="store_true",
                    help="compute and STORE the calibration, REPLACING the existing one")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     preflight.require_host(a.host, a.port, "PhotonVision's web server")
     try:
         sys.exit(asyncio.run(run(a)))

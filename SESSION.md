@@ -12,18 +12,32 @@ it needs, the layout gives it multi-tag solves to score on, and the spin is
 only as good as the detections underneath it. Doing these out of order does not
 error — it produces confident wrong numbers.
 
-Fill these in as you go. **Two different boxes, and they are not
-interchangeable.**
+**Two different boxes, and they are not interchangeable.**
 
-- `PI` = the Raspberry Pi running PhotonVision. Everything that reads a
-  camera, a calibration or the live image talks to this, on port 5800.
-- `RIO` = the roboRIO. It is the NetworkTables server once the robot is on,
-  so everything that reads a robot pose or the gyro talks to this.
+- the **Pi** runs PhotonVision. Everything that reads a camera, a calibration
+  or the live image talks to this, on port 5800. Ours is `10.54.59.12`.
+- the **roboRIO** is the NetworkTables server once the robot is on, so
+  everything that reads a robot pose or the gyro talks to this. By the FRC
+  rule it is always `10.TE.AM.2` - for team 5459, `10.54.59.2`.
 
+Set these once per terminal and then never type an address again:
+
+```sh
+export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459
+export FRC_PI=10.54.59.12         # Windows:  set FRC_PI=10.54.59.12
 ```
-PI  = ______________________
-RIO = ______________________
+
+Every tool then takes `--host rio` or `--host pi` and works out the rest. Use
+`setx` instead of `set` on Windows to make it stick across terminals.
+
+Check both boxes before anything else:
+
+```sh
+python preflight.py
 ```
+
+It prints the interpreter, warns if an activated conda environment is not the
+one running, and reports whether the roboRIO and the Pi actually answer.
 
 ---
 
@@ -90,9 +104,9 @@ sudo systemctl restart photonvision
 >
 > | tool | `--host` | why |
 > |---|---|---|
-> | `photon_calib`, `calib_view`, `charuco_capture` | **`$PI`** | they read PhotonVision's own web server, port 5800 |
-> | `calibrate_mount`, `photontune` | **`$RIO`** | they read NetworkTables |
-> | `field_viewer` | **`$RIO`** plus `--pv-host $PI` | poses come over NT, the FOV cones come from the calibration |
+> | `photon_calib`, `calib_view`, `charuco_capture` | **`pi`** | they read PhotonVision's own web server, port 5800 |
+> | `calibrate_mount`, `photontune` | **`rio`** | they read NetworkTables |
+> | `field_viewer` | **`rio`** plus `--pv-host pi` | poses come over NT, the FOV cones come from the calibration |
 >
 > Pointing an NT tool at the Pi is the classic way to lose an hour: it sits
 > there seeing nothing and looks broken. Pointing a camera tool at the roboRIO
@@ -103,7 +117,7 @@ sudo systemctl restart photonvision
 ## 2. Calibration — 60 seconds, then decide
 
 ```sh
-python3 survey/photon_calib.py --host $PI --running 1280 800
+python3 survey/photon_calib.py --host pi --running 1280 800
 ```
 
 Change `1280 800` to whatever resolution you will **actually run**.
@@ -134,9 +148,9 @@ Read the output:
 ### Only if you need to calibrate
 
 ```sh
-python3 calib/calib_view.py --host $PI            # mirrored, so left is left
-python3 calib/charuco_capture.py --host $PI --camera "NAME" --dry-run
-python3 calib/charuco_capture.py --host $PI --camera "NAME" \
+python3 calib/calib_view.py --host pi            # mirrored, so left is left
+python3 calib/charuco_capture.py --host pi --camera "NAME" --dry-run
+python3 calib/charuco_capture.py --host pi --camera "NAME" \
     --width 8 --height 8 --square 1.0 --marker 0.75 --family 4x4 --end
 ```
 
@@ -233,7 +247,7 @@ changes which command you run.
 ### Check for flicker FIRST — 30 seconds
 
 ```sh
-python3 calib/calib_view.py --host $PI
+python3 calib/calib_view.py --host pi
 ```
 
 Watch the image for a few seconds. **Whole-frame brightness pulsing** — not
@@ -314,7 +328,7 @@ photontune publishes under **`/PhotonTune`**. Set `run` true to start a tune.
 
 ```sh
 python3 mount/calibrate_mount.py record spin.npz 60 \
-    --host $RIO --motion spin --gyro-topic /SmartDashboard/Gyro
+    --host rio --motion spin --gyro-topic /SmartDashboard/Gyro
 ```
 
 Counts down `SPIN IN PLACE in 3… 2… 1…` then records for 60 s.
@@ -325,7 +339,7 @@ Counts down `SPIN IN PLACE in 3… 2… 1…` then records for 60 s.
 
 ```sh
 python3 mount/calibrate_mount.py record drive.npz 30 \
-    --host $RIO --motion drive --gyro-topic /SmartDashboard/Gyro
+    --host rio --motion drive --gyro-topic /SmartDashboard/Gyro
 ```
 
 Counts down `DRIVE STRAIGHT in 3… 2… 1…` then records for 30 s.

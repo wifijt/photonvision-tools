@@ -230,7 +230,9 @@ def main():
     p.add_argument("--host", default="photonvision.local")
     p.add_argument("--port", type=int, default=5800, help="PhotonVision API port")
     p.add_argument("--serve", type=int, default=8078, help="local port for this viewer")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     preflight.require_host(a.host, a.port, "PhotonVision's web server")
     STATE["host"] = a.host
     threading.Thread(target=poll, args=(a.host, a.port), daemon=True).start()

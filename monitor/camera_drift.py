@@ -176,7 +176,9 @@ def main():
     p.add_argument("--watch", metavar="FILE", help="compare against a recorded baseline")
     p.add_argument("--sigma", type=float, default=5.0,
                    help="alarm at this many baseline sigmas (default 5)")
+    preflight.add_team_argument(p)
     a = p.parse_args()
+    a.host = preflight.resolve_host(a.host, a.team)
     preflight.require_host(a.host, getattr(a, "port", 5800), "PhotonVision's web server")
     if not a.baseline and not a.watch:
         sys.exit("give --baseline FILE to record, or --watch FILE to compare")

@@ -210,14 +210,81 @@ def require_nt(inst, host, seconds=10.0):
         % (host, local_address() or "could not determine this machine's address"))
 
 
+
+def team_base(team):
+    """10.TE.AM from a team number, by the documented FRC rule.
+
+    Zero-pad to four digits and split: 5459 -> 10.54.59, 123 -> 10.1.23,
+    9 -> 10.0.9. Doing it by arithmetic instead (divmod by 100) gets the
+    short team numbers wrong, which is the kind of bug that only shows up
+    at the one event where you borrow a laptop from another team.
+    """
+    d = "%04d" % int(team)
+    return "10.%d.%d" % (int(d[:2]), int(d[2:]))
+
+
+def resolve_host(value, team=None):
+    """Turn a role into an address, so nobody types an IP under pressure.
+
+        rio / roborio   ->  10.TE.AM.2      the NT server on a robot
+        radio           ->  10.TE.AM.1
+        pi / photon     ->  $FRC_PI, else photonvision.local
+        .12             ->  10.TE.AM.12
+        anything else   ->  itself
+
+    The team number comes from --team or $FRC_TEAM. Roles that need it and
+    cannot get it say so rather than guessing.
+    """
+    if not value:
+        return value
+    v = str(value).strip()
+    low = v.lower()
+    if low in ("pi", "photon", "photonvision", "coprocessor"):
+        return os.environ.get("FRC_PI") or "photonvision.local"
+    team = team or os.environ.get("FRC_TEAM")
+    if low in ("rio", "roborio", "radio"):
+        if not team:
+            sys.exit("'%s' needs a team number: pass --team, or set FRC_TEAM.\n"
+                     "Team 5459 would make the roboRIO 10.54.59.2." % v)
+        return "%s.%d" % (team_base(team), 1 if low == "radio" else 2)
+    if v.startswith(".") and v[1:].isdigit():
+        if not team:
+            sys.exit("'%s' is a last octet and needs a team number: pass --team, "
+                     "or set FRC_TEAM." % v)
+        return "%s%s" % (team_base(team), v)
+    return v
+
+
+def add_team_argument(parser):
+    """`--team`, defaulted from the environment. One line per tool."""
+    parser.add_argument("--team", default=os.environ.get("FRC_TEAM"),
+                        help="FRC team number, so --host can be 'rio' or '.12'. "
+                             "Defaults to $FRC_TEAM.")
+
 if __name__ == "__main__":
     print("interpreter:")
     print(interpreter())
     note = conda_mismatch()
     print("\nconda: " + (note if note else "running the activated environment (or none)"))
     print("\nlocal address: %s" % (local_address() or "unknown"))
-    for h in sys.argv[1:]:
-        host, _, port = h.partition(":")
+    team = os.environ.get("FRC_TEAM")
+    args = [a for a in sys.argv[1:] if not a.startswith("--team=")]
+    for a in sys.argv[1:]:
+        if a.startswith("--team="):
+            team = a.split("=", 1)[1]
+    if team:
+        print("\nteam %s -> %s.x   (roboRIO %s.2, radio %s.1)"
+              % (team, team_base(team), team_base(team), team_base(team)))
+    if not args:
+        args = ["rio:5810", "pi:5800"] if team else ["pi:5800"]
+        print("checking the usual two; name others as host[:port]")
+    print("")
+    for h in args:
+        host, _, port = h.rpartition(":")
+        if not host:
+            host, port = h, "5800"
+        addr = resolve_host(host, team)
         port = int(port or 5800)
-        ok, detail = reachable(host, port)
-        print("%s:%d  %s  (%s)" % (host, port, "OK" if ok else "UNREACHABLE", detail))
+        ok, detail = reachable(addr, port)
+        label = addr if addr == host else "%s = %s" % (host, addr)
+        print("%-28s :%-5d %s  (%s)" % (label, port, "OK" if ok else "UNREACHABLE", detail))
