@@ -76,10 +76,14 @@ instead of your hand, and a larger radius.
 import argparse
 import json
 import math
+import os
 import sys
 import time
 
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import preflight
 
 PER_BIN = 12          # max samples per 2-degree slice of the arc
 
@@ -229,13 +233,91 @@ def _need_nt():
             % (e, sys.executable, sys.version.split()[0]))
 
 
+def _check_cameras(inst, names, table="photonvision"):
+    """Fail now if a nickname does not exist, rather than record nothing.
+
+    NetworkTables paths are CASE-SENSITIVE. Asking for "left" when the camera
+    is published as "Left" finds nothing, and photonlibpy's own complaint -
+    "has not reported a message interface UUID - is your coprocessor's camera
+    started?" - sends you to look at the camera, the Pi and the network, none
+    of which are wrong. It cost a session. The names are right there in NT, so
+    there is no reason to guess.
+    """
+    have = sorted(inst.getTable(table).getSubTables())
+    missing = [n for n in names if n not in have]
+    if not missing:
+        return have
+    msg = ["no such camera on NetworkTables: %s" % ", ".join(repr(n) for n in missing), ""]
+    if have:
+        msg += ["Published under /%s/ right now:" % table]
+        msg += ["    %s" % n for n in have]
+        low = {n.lower(): n for n in have}
+        fixes = [(n, low[n.lower()]) for n in missing if n.lower() in low]
+        if fixes:
+            msg += ["",
+                    "These differ only in CASE, and NT paths are case-sensitive:"]
+            msg += ["    %r  ->  %r" % (a, b) for a, b in fixes]
+            msg += ["", "    --cameras \"%s\""
+                    % ",".join(dict(fixes).get(n, n) for n in names)]
+    else:
+        msg += ["Nothing at all is published under /%s/." % table,
+                "PhotonVision is not reaching this NT server. On a robot the",
+                "server is the roboRIO and PhotonVision must be an NT CLIENT",
+                "pointed at it (runNTServer off)."]
+    sys.exit("\n".join(msg))
+
+
+def _warmup(cams, seconds=3.0):
+    """Is each camera actually producing results, before anyone drives?
+
+    Separate from the name check: a camera can exist in NT and publish nothing,
+    which is what a missing calibration at the running resolution looks like.
+    """
+    import time as _t
+    got, multi = {n: 0 for n in cams}, {n: 0 for n in cams}
+    t0 = _t.time()
+    while _t.time() - t0 < seconds:
+        for n, c in cams.items():
+            r = c.getLatestResult()
+            md = getattr(r, "metadata", None)
+            if not md:
+                continue
+            got[n] += 1
+            mt = getattr(r, "multitagResult", None)
+            if mt is not None and hasattr(mt, "isPresent"):
+                mt = mt.get() if mt.isPresent() else None
+            if mt is not None and getattr(mt, "estimatedPose", None) is not None:
+                multi[n] += 1
+        _t.sleep(0.01)
+    print("\n  warm-up over %.0fs:" % seconds)
+    for n in cams:
+        print("    %-14s %4d results, %4d with a multi-tag solve"
+              % (n, got[n], multi[n]))
+    dead = [n for n in cams if got[n] == 0]
+    if dead:
+        sys.exit(
+            "\n%s produced NO results at all.\n\n"
+            "The name exists in NT, so this is the camera itself. The usual\n"
+            "cause is no calibration at the resolution it is running - such a\n"
+            "camera publishes nothing and looks exactly like a dead one.\n"
+            "    python survey/photon_calib.py --host <THE PI> --running W H"
+            % ", ".join(dead))
+    if not any(multi.values()):
+        print("\n  !! no multi-tag solves yet. The spin needs them - every row")
+        print("     comes from multitagResult. Point the cameras at two or more")
+        print("     tags before starting, or this records 60 seconds of nothing.")
+
+
 def record(path, seconds, host, names, gyro_topic=None, motion="spin"):
     ntcore, PhotonCamera = _need_nt()
     inst = ntcore.NetworkTableInstance.getDefault()
     inst.startClient4("mount-cal")
     inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
+    preflight.require_nt(inst, host)
+    time.sleep(1.5)          # let the topic list arrive
+    _check_cameras(inst, names)
     cams = {n: PhotonCamera(n) for n in names}
-    time.sleep(2.5)
+    _warmup(cams)
     gyro = None
     if gyro_topic:
         gyro = inst.getDoubleTopic(gyro_topic).subscribe(float("nan"))
