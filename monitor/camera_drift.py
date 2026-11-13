@@ -40,6 +40,10 @@ WHAT IT CANNOT DO
     camera moved - only that the pair no longer agrees.  Two stations at
     different distances will usually settle that by inspection.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, json, math, os, statistics as st, sys, time
 from collections import defaultdict, deque
 
@@ -173,6 +177,7 @@ def main():
     p.add_argument("--sigma", type=float, default=5.0,
                    help="alarm at this many baseline sigmas (default 5)")
     a = p.parse_args()
+    preflight.require_host(a.host, getattr(a, "port", 5800), "PhotonVision's web server")
     if not a.baseline and not a.watch:
         sys.exit("give --baseline FILE to record, or --watch FILE to compare")
     if a.baseline and a.watch:

@@ -30,6 +30,10 @@ on it, and reports how many calibration observations PhotonVision has actually
 KEPT - not how many you have shot. Those are different numbers, and only the
 first one counts.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, json, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -227,6 +231,7 @@ def main():
     p.add_argument("--port", type=int, default=5800, help="PhotonVision API port")
     p.add_argument("--serve", type=int, default=8078, help="local port for this viewer")
     a = p.parse_args()
+    preflight.require_host(a.host, a.port, "PhotonVision's web server")
     STATE["host"] = a.host
     threading.Thread(target=poll, args=(a.host, a.port), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", a.serve), H)

@@ -32,6 +32,10 @@ on an OV9281 it gives 60.1 deg where the true figure is 69.4.  Cones drawn from
 the pinhole number are too narrow and will tell you that you have a blind spot
 you do not have.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, json, math, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1081,6 +1085,7 @@ def main():
     p.add_argument("--lock-extrinsic", action="store_true",
                    help="use the cached camera-to-camera transform and stop re-learning it")
     a = p.parse_args()
+    preflight.require_host(a.host, 5810, "the NetworkTables server")
 
     print("field viewer")
     pv = a.pv_host or a.host

@@ -48,6 +48,10 @@ below is in IMAGE coordinates. The mirrored view makes the board move the way
 your hands do. The mirror is display-only; the frames PhotonVision calibrates
 from are untouched.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, json, sys, time, urllib.request
 
 try:
@@ -256,6 +260,7 @@ def main():
     p.add_argument("--end", action="store_true",
                    help="compute and STORE the calibration, REPLACING the existing one")
     a = p.parse_args()
+    preflight.require_host(a.host, a.port, "PhotonVision's web server")
     try:
         sys.exit(asyncio.run(run(a)))
     except KeyboardInterrupt:

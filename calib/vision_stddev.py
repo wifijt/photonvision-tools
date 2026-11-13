@@ -37,6 +37,10 @@ WHAT THIS MEASURES, AND WHAT IT DOES NOT
     And it is measured STANDING STILL, which is not when you use it.  A moving
     camera has motion blur and a stale timestamp on top of everything here.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import preflight
+
 import argparse, asyncio, json, math, statistics as st, sys, time
 from collections import defaultdict
 
@@ -324,6 +328,7 @@ def main():
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
     p.add_argument("--json", metavar="FILE", help="also write the raw summaries")
     a = p.parse_args()
+    preflight.require_host(a.host, getattr(a, "port", 5800), "PhotonVision's web server")
     only = {c.strip().lower() for c in a.cameras.split(",")} if a.cameras else None
     stations = asyncio.run(collect(a.host, a.port, a.seconds, only))
     if not stations:
