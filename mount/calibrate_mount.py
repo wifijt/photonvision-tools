@@ -72,6 +72,40 @@ pose estimates carry a viewpoint-dependent bias of roughly +/-10 mm that no
 amount of averaging at one viewpoint removes. A robot spinning two full turns
 improves all of it: 360 deg of arc instead of 55-80, a genuinely fixed axis
 instead of your hand, and a larger radius.
+
+OPTIONS
+    mode record | solve    `record` captures a motion to a .npz; `solve` turns
+                           recordings into robotToCamera
+    file                   the .npz to write (record) or read (solve). Name it
+                           spin.npz / drive.npz - --motion is guessed from it
+    seconds                how long to record for  (default 60.0)
+    --host                 the NetworkTables server - 'rio' on a robot. NOT the
+                           Pi: PhotonVision is an NT client there  (default
+                           photonvision.local)
+    --cameras              comma-separated nicknames  (default OV9281,OV9281
+                           (1))
+    --forward FILE         a recording of one STRAIGHT drive, made with
+                           `record`. Resolves the single shared unknown - where
+                           robot forward points - and turns the relative
+                           answers into a full robotToCamera per camera.
+    --motion               which recording this is. 'spin' is two turns in
+                           place; 'drive' is one straight run. It only changes
+                           what the prompt tells you to do, but doing the wrong
+                           one is not an error the solve can catch - a second
+                           spin recorded as a drive just defines robot forward
+                           as whichever way the robot drifted. Guessed from the
+                           filename if omitted.
+    --gyro-topic TOPIC     full NT topic of the robot's heading as a number,
+                           e.g. /SmartDashboard/Gyro. Recorded alongside the
+                           cameras so the spin can check the Pigeon's scale and
+                           sign and the drive can give the gyro-to-forward
+                           offset. Omit it on `record` and the candidate topics
+                           are listed for you.
+    --origin-height        metres from the floor (or robot origin plane) up to
+                           the layout's Z=0. A surveyed bench layout anchors Z
+                           to a TAG, so measure that tag's height once. The
+                           official FRC field layout already uses true heights
+                           - pass 0 there.
 """
 import argparse
 import json
@@ -967,10 +1001,14 @@ def solve(path, origin_height=None, forward_path=None):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["record", "solve"])
-    ap.add_argument("file")
-    ap.add_argument("seconds", nargs="?", type=float, default=60.0)
-    ap.add_argument("--host", default="photonvision.local")
+    ap.add_argument("mode", choices=["record", "solve"],
+                    help="`record` captures a motion to a .npz; `solve` turns recordings into robotToCamera")
+    ap.add_argument("file",
+                    help="the .npz to write (record) or read (solve). Name it spin.npz / drive.npz - --motion is guessed from it")
+    ap.add_argument("seconds", nargs="?", type=float, default=60.0,
+                    help="how long to record for")
+    ap.add_argument("--host", default="photonvision.local",
+                    help="the NetworkTables server - 'rio' on a robot. NOT the Pi: PhotonVision is an NT client there")
     ap.add_argument("--cameras", default="OV9281,OV9281 (1)",
                     help="comma-separated nicknames")
     ap.add_argument("--forward", default=None, metavar="FILE",

@@ -8,7 +8,15 @@
 # version.  This program is distributed WITHOUT ANY WARRANTY; see the GNU
 # General Public License at <https://www.gnu.org/licenses/> for details.
 #
-"""Capture PhotonVision's OWN detected corners over NetworkTables, across viewpoints."""
+"""Capture PhotonVision's OWN detected corners over NetworkTables, across viewpoints.
+
+OPTIONS
+    out         output json
+    seconds     how long to collect corners for  (default 120.0)
+    --host      the NetworkTables server - 'rio' on a robot  (default
+                photonvision.local)
+    --camera    camera nickname (default: auto-detect)
+"""
 import sys,os,json,time,ntcore,numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from photonlibpy.photonCamera import PhotonCamera
@@ -16,8 +24,10 @@ from collections import Counter
 import argparse
 _ap=argparse.ArgumentParser(description="Record PhotonVision's detected corners across viewpoints.")
 _ap.add_argument("out", help="output json")
-_ap.add_argument("seconds", nargs="?", type=float, default=120.0)
-_ap.add_argument("--host", default="photonvision.local")
+_ap.add_argument("seconds", nargs="?", type=float, default=120.0,
+                 help="how long to collect corners for")
+_ap.add_argument("--host", default="photonvision.local",
+                 help="the NetworkTables server - 'rio' on a robot")
 _ap.add_argument("--camera", default=None, help="camera nickname (default: auto-detect)")
 _a=_ap.parse_args()
 OUT=_a.out; DUR=_a.seconds

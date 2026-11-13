@@ -47,6 +47,22 @@ board to YOUR left puts it on the RIGHT of the image, and every instruction
 below is in IMAGE coordinates. The mirrored view makes the board move the way
 your hands do. The mirror is display-only; the frames PhotonVision calibrates
 from are untouched.
+
+OPTIONS
+    --host        the PhotonVision box ('pi', or an address) - calibration is
+                  written there  (default photonvision.local)
+    --port        PhotonVision's web/websocket port  (default 5800)
+    --camera      nickname, e.g. "OV9281"
+    --mode        video mode index (default: whatever is active)
+    --width       board squares across  (default 8)
+    --height      board squares down  (default 8)
+    --square      square size, inches  (default 1.0)
+    --marker      marker size, inches  (default 0.75)
+    --family      ArUco dictionary on your printed board  (default 4x4)
+    --interval    seconds between shots  (default 1.2)
+    --settle      seconds to reposition between phases  (default 4)
+    --dry-run     walk the plan, take nothing, change nothing
+    --end         compute and STORE the calibration, REPLACING the existing one
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -242,8 +258,10 @@ async def run(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
-    p.add_argument("--port", type=int, default=5800)
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address) - calibration is written there")
+    p.add_argument("--port", type=int, default=5800,
+                   help="PhotonVision's web/websocket port")
     p.add_argument("--camera", required=True, help="nickname, e.g. \"OV9281\"")
     p.add_argument("--mode", type=int, default=None,
                    help="video mode index (default: whatever is active)")

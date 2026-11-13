@@ -33,6 +33,16 @@ framerate exactly when the venue is hottest and the match matters.
 
 RUN IT UNDER REAL LOAD. An idle Pi in a sealed case proves nothing. Both cameras
 should be running their normal pipelines for the whole test.
+
+OPTIONS
+    --host        the PhotonVision box ('pi', or an address)  (default
+                  photonvision.local)
+    --port        PhotonVision's web port  (default 5800)
+    --minutes     how long to run the soak  (default 30.0)
+    --ambient     room temperature in C - lets the test report the ambient at
+                  which this case would begin to throttle
+    --log FILE    write a CSV row per sample here
+    --quiet       only print the summary
 """
 import argparse, asyncio, json, math, statistics as st, sys, time
 
@@ -219,14 +229,19 @@ def report(run, ambient):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
-    p.add_argument("--port", type=int, default=5800)
-    p.add_argument("--minutes", type=float, default=30.0)
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address)")
+    p.add_argument("--port", type=int, default=5800,
+                   help="PhotonVision's web port")
+    p.add_argument("--minutes", type=float, default=30.0,
+                   help="how long to run the soak")
     p.add_argument("--ambient", type=float, default=None,
                    help="room temperature in C - lets the test report the ambient "
                         "at which this case would begin to throttle")
-    p.add_argument("--log", default=None, metavar="FILE")
-    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--log", default=None, metavar="FILE",
+                   help="write a CSV row per sample here")
+    p.add_argument("--quiet", action="store_true",
+                   help="only print the summary")
     a = p.parse_args()
 
     run = Run()

@@ -58,6 +58,26 @@ in a sweep, producing an impossible non-monotonic response (tags 0.25, 0, 0.03,
 
 Setting enable=false in autonomousInit and true in disabledInit is the whole
 integration.
+
+OPTIONS
+    --off                no streams at all (match)
+    --on                 processed stream with overlays (pit)
+    --raw                raw stream only
+    --both               raw + processed
+    --status             show current state
+    --daemon             follow NT, let the robot decide
+    --host               the PhotonVision box ('pi', or an address)  (default
+                         photonvision.local)
+    --table              NT table for --daemon  (default PhotonStreams)
+    --nt-server          NT server (default: --host)
+    --camera             act on this camera only (default: all of them)
+    --measure            also measure latency/fps after applying
+    --publish-metrics    daemon: also publish per-camera fps/latencyMs. OFF by
+                         default: polling PhotonVision's websocket on the
+                         coprocessor competes with photontune's own reads and
+                         corrupted a sweep badly enough to pick an exposure 4x
+                         too long. Only enable if nothing else is reading the
+                         websocket at the same time.
 """
 import argparse
 import asyncio
@@ -271,7 +291,8 @@ def main():
     g.add_argument("--both", action="store_true", help="raw + processed")
     g.add_argument("--status", action="store_true", help="show current state")
     g.add_argument("--daemon", action="store_true", help="follow NT, let the robot decide")
-    ap.add_argument("--host", default="photonvision.local")
+    ap.add_argument("--host", default="photonvision.local",
+                    help="the PhotonVision box ('pi', or an address)")
     ap.add_argument("--table", default="PhotonStreams", help="NT table for --daemon")
     ap.add_argument("--nt-server", default=None, help="NT server (default: --host)")
     ap.add_argument("--camera", default=None,

@@ -13,6 +13,15 @@
 Hardcoding intrinsics is a silent failure: a survey solved with the wrong camera
 matrix produces a map that looks internally consistent and is geometrically wrong.
 Always pull them from the box that is actually running.
+
+OPTIONS
+    host_pos HOST    the PhotonVision host; --host also works
+    --host           the PhotonVision box ('pi', or an address). The
+                     calibration lives there, not on the roboRIO
+    --running W H    the resolution you will actually RUN. A camera with no
+                     calibration at its active resolution publishes NOTHING,
+                     which looks exactly like a dead camera, so this is the
+                     only question that matters before a session.
 """
 import io, json, sqlite3, tempfile, urllib.request, zipfile, os
 import numpy as np
@@ -98,7 +107,8 @@ if __name__ == "__main__":
         description="List every camera's calibrations on a PhotonVision host.")
     ap.add_argument("host_pos", nargs="?", metavar="HOST", default=None,
                     help="the PhotonVision host; --host also works")
-    ap.add_argument("--host", default=None)
+    ap.add_argument("--host", default=None,
+                    help="the PhotonVision box ('pi', or an address). The calibration lives there, not on the roboRIO")
     ap.add_argument("--running", nargs=2, type=int, default=None,
                     metavar=("W", "H"),
                     help="the resolution you will actually RUN. A camera with no "

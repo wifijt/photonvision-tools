@@ -36,6 +36,14 @@ WHAT THIS MEASURES, AND WHAT IT DOES NOT
 
     And it is measured STANDING STILL, which is not when you use it.  A moving
     camera has motion blur and a stale timestamp on top of everything here.
+
+OPTIONS
+    --host         the PhotonVision box ('pi', or an address)  (default
+                   photonvision.local)
+    --port         PhotonVision's web/websocket port  (default 5800)
+    --seconds      how long to sample before reporting  (default 120)
+    --cameras      comma-separated nicknames
+    --json FILE    also write the raw summaries
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -322,9 +330,12 @@ def report(stations, args):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
-    p.add_argument("--port", type=int, default=5800)
-    p.add_argument("--seconds", type=int, default=120)
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address)")
+    p.add_argument("--port", type=int, default=5800,
+                   help="PhotonVision's web/websocket port")
+    p.add_argument("--seconds", type=int, default=120,
+                   help="how long to sample before reporting")
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
     p.add_argument("--json", metavar="FILE", help="also write the raw summaries")
     preflight.add_team_argument(p)

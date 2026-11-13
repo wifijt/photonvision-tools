@@ -39,6 +39,16 @@ WHAT IT CANNOT DO
     also the only time a drift check means anything.  It cannot tell you WHICH
     camera moved - only that the pair no longer agrees.  Two stations at
     different distances will usually settle that by inspection.
+
+OPTIONS
+    --host             the PhotonVision box ('pi', or an address)  (default
+                       photonvision.local)
+    --port             PhotonVision's web/websocket port  (default 5800)
+    --seconds          how long to watch the two cameras  (default 60)
+    --baseline FILE    record the rig as it is now
+    --watch FILE       compare against a recorded baseline
+    --sigma            alarm at this many baseline sigmas (default 5)  (default
+                       5.0)
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -169,9 +179,12 @@ def describe(pairs):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
-    p.add_argument("--port", type=int, default=5800)
-    p.add_argument("--seconds", type=int, default=60)
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address)")
+    p.add_argument("--port", type=int, default=5800,
+                   help="PhotonVision's web/websocket port")
+    p.add_argument("--seconds", type=int, default=60,
+                   help="how long to watch the two cameras")
     p.add_argument("--baseline", metavar="FILE", help="record the rig as it is now")
     p.add_argument("--watch", metavar="FILE", help="compare against a recorded baseline")
     p.add_argument("--sigma", type=float, default=5.0,

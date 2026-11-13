@@ -29,6 +29,12 @@ It shows the OUTPUT stream, which is the one with the detection overlays drawn
 on it, and reports how many calibration observations PhotonVision has actually
 KEPT - not how many you have shot. Those are different numbers, and only the
 first one counts.
+
+OPTIONS
+    --host     the PhotonVision box ('pi', or an address). NOT the roboRIO -
+               this reads the camera stream  (default photonvision.local)
+    --port     PhotonVision API port  (default 5800)
+    --serve    local port for this viewer  (default 8078)
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -227,7 +233,8 @@ tick(); setInterval(tick,2000);
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address). NOT the roboRIO - this reads the camera stream")
     p.add_argument("--port", type=int, default=5800, help="PhotonVision API port")
     p.add_argument("--serve", type=int, default=8078, help="local port for this viewer")
     preflight.add_team_argument(p)

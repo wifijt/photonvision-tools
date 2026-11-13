@@ -49,6 +49,15 @@ different, and the gap is where an evening goes. A camera can bind perfectly and
 still be missing from PhotonVision, or arrive with no calibration for its
 resolution, which makes it useless for pose and reports nothing at all rather
 than failing loudly.
+
+OPTIONS
+    --show           what is connected and configured
+    --set SENSORS    comma-separated, in connector order: --set ov9281,ov9281
+    --verify         after a reboot: did it work
+    --expect         how many cameras --verify requires
+    --host           PhotonVision host (default localhost)  (default 127.0.0.1)
+    --port           PhotonVision's web port, for --verify  (default 5800)
+    --dry-run        print the config.txt change and write nothing
 """
 import argparse, glob, json, os, re, shutil, subprocess, sys, time
 
@@ -345,8 +354,10 @@ def main():
     p.add_argument("--verify", action="store_true", help="after a reboot: did it work")
     p.add_argument("--expect", type=int, default=0, help="how many cameras --verify requires")
     p.add_argument("--host", default="127.0.0.1", help="PhotonVision host (default localhost)")
-    p.add_argument("--port", type=int, default=5800)
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--port", type=int, default=5800,
+                   help="PhotonVision's web port, for --verify")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the config.txt change and write nothing")
     a = p.parse_args()
     if a.set:
         write_config(a)

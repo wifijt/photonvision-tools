@@ -22,6 +22,9 @@ present". Exits non-zero if anything you asked about is missing.
 
     python3 setup/check_env.py              # everything
     python3 setup/check_env.py --session    # just tonight's path
+
+OPTIONS
+    --session    only the tools a normal session needs
 """
 import argparse
 import importlib

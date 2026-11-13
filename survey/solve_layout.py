@@ -8,7 +8,42 @@
 # version.  This program is distributed WITHOUT ANY WARRANTY; see the GNU
 # General Public License at <https://www.gnu.org/licenses/> for details.
 #
-"""Reprojection bundle adjustment on PhotonVision's corners -> AprilTagFieldLayout."""
+"""Reprojection bundle adjustment on PhotonVision's corners -> AprilTagFieldLayout.
+
+OPTIONS
+    frames                  json from capture_corners.py
+    --max-frames            subsample to this many frames before solving
+                            (default 250). More is slower without being more
+                            accurate.  (default 250)
+    out                     output AprilTagFieldLayout json
+    tag_size                black-square edge in metres (default 0.1651 =
+                            6.5in)  (default 0.1651)
+    --host                  fetch calibration from this PhotonVision (default)
+                            (default photonvision.local)
+    --camera NICKNAME       which camera's calibration to use. REQUIRED once
+                            more than one camera is calibrated: two OV9281s
+                            hold the same resolutions, so without this the
+                            wrong intrinsics can be picked silently and the
+                            layout comes out consistent and wrong.
+    --ref-tag ID            tag that becomes the origin. PIN THIS for any
+                            layout you intend to reuse: without it the origin
+                            is whichever tag happened to be seen most, which
+                            can change between surveys of the same room and
+                            silently move the whole frame.
+    --ref-height M          metres from the floor up to the reference tag's
+                            CENTRE. Shifts every z so the layout's z=0 is the
+                            floor instead of a tag. Then calibrate_mount.py
+                            takes --origin-height 0.
+    --field LENGTH WIDTH    metres, written into the layout's field block.
+                            WPILib uses it for setOrigin(); tools that draw a
+                            field use it for the extents. Default 8x8 is a
+                            placeholder, not a measurement.
+    --fx                    focal length in px, overriding the fetched
+                            calibration. Wrong here scales every distance
+    --fy                    focal length in px (y)
+    --cx                    principal point in px (x)
+    --cy                    principal point in px (y)
+"""
 import sys,json,numpy as np,cv2
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
@@ -45,8 +80,12 @@ _ap.add_argument("--field", nargs=2, type=float, default=None,
                  help="metres, written into the layout's field block. WPILib uses "
                       "it for setOrigin(); tools that draw a field use it for the "
                       "extents. Default 8x8 is a placeholder, not a measurement.")
-_ap.add_argument("--fx", type=float); _ap.add_argument("--fy", type=float)
-_ap.add_argument("--cx", type=float); _ap.add_argument("--cy", type=float)
+_ap.add_argument("--fx", type=float,
+                 help="focal length in px, overriding the fetched calibration. Wrong here scales every distance"); _ap.add_argument("--fy", type=float,
+                                                                                                                                    help="focal length in px (y)")
+_ap.add_argument("--cx", type=float,
+                 help="principal point in px (x)"); _ap.add_argument("--cy", type=float,
+                                                                     help="principal point in px (y)")
 _a=_ap.parse_args()
 FR=_a.frames; OUT=_a.out; TAG=_a.tag_size; MAXF=_a.max_frames
 REF_H=_a.ref_height; FIELD=_a.field

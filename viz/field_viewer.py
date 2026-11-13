@@ -31,6 +31,28 @@ FIELD OF VIEW is computed from the calibration INCLUDING distortion.  The usual
 on an OV9281 it gives 60.1 deg where the true figure is 69.4.  Cones drawn from
 the pinhole number are too narrow and will tell you that you have a blind spot
 you do not have.
+
+OPTIONS
+    --host              the NetworkTables server. With a robot on that is the
+                        roboRIO, NOT the Pi - PhotonVision is only the NT
+                        server when runNTServer is on.  (default
+                        photonvision.local)
+    --pv-host HOST      PhotonVision's own address, when it is not the NT
+                        server. Only the camera FOV cones need it; poses come
+                        over NT.
+    --port              local port to serve the view on  (default 8077)
+    --table             NetworkTables table PhotonVision publishes under
+                        (default photonvision)
+    --trail             trail points kept per camera  (default 400)
+    --field-long        known long dimension in metres, drawn as the outline
+    --field-short       short dimension in metres (drawn dashed - the survey
+                        cannot check it)
+    --no-field          draw no field outline even if dimensions were given
+    --log FILE          append one JSON object per fused pose (JSONL)
+    --log-hz            how often to write a log row (default 10)  (default
+                        10.0)
+    --lock-extrinsic    use the cached camera-to-camera transform and stop re-
+                        learning it
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -1070,14 +1092,17 @@ def main():
     p.add_argument("--pv-host", default=None, metavar="HOST",
                    help="PhotonVision's own address, when it is not the NT server. "
                         "Only the camera FOV cones need it; poses come over NT.")
-    p.add_argument("--port", type=int, default=8077)
-    p.add_argument("--table", default="photonvision")
+    p.add_argument("--port", type=int, default=8077,
+                   help="local port to serve the view on")
+    p.add_argument("--table", default="photonvision",
+                   help="NetworkTables table PhotonVision publishes under")
     p.add_argument("--trail", type=int, default=400, help="trail points kept per camera")
     p.add_argument("--field-long", type=float, default=None,
                    help="known long dimension in metres, drawn as the outline")
     p.add_argument("--field-short", type=float, default=None,
                    help="short dimension in metres (drawn dashed - the survey cannot check it)")
-    p.add_argument("--no-field", action="store_true")
+    p.add_argument("--no-field", action="store_true",
+                   help="draw no field outline even if dimensions were given")
     p.add_argument("--log", default=None, metavar="FILE",
                    help="append one JSON object per fused pose (JSONL)")
     p.add_argument("--log-hz", type=float, default=10.0,

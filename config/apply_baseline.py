@@ -16,6 +16,14 @@ venue-dependent value, while everything here should be the same everywhere.
 
 Every value below has a measured reason, given in WHY. Run with --explain to
 print them without changing anything.
+
+OPTIONS
+    --host          the PhotonVision box ('pi', or an address) whose pipeline
+                    is rewritten  (default photonvision.local)
+    --cameras       comma-separated nicknames
+    --brightness    override the baseline cameraBrightness for your camera
+    --dry-run       print what would change and write nothing
+    --explain       print the reasoning and exit
 """
 import argparse, asyncio, sys, time
 
@@ -157,11 +165,13 @@ async def apply(host, camera_filter, dry_run):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local")
+    p.add_argument("--host", default="photonvision.local",
+                   help="the PhotonVision box ('pi', or an address) whose pipeline is rewritten")
     p.add_argument("--cameras", default=None, help="comma-separated nicknames")
     p.add_argument("--brightness", type=float, default=None,
                    help="override the baseline cameraBrightness for your camera")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print what would change and write nothing")
     p.add_argument("--explain", action="store_true", help="print the reasoning and exit")
     a = p.parse_args()
     if a.explain:

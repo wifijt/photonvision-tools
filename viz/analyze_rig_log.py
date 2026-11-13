@@ -17,6 +17,12 @@ two consecutive samples is the estimator failing, not the rig moving.  This
 finds those jumps, groups them into episodes, and then - the useful part -
 compares the conditions during jumps against the conditions the rest of the
 time, so you get a cause rather than a complaint.
+
+OPTIONS
+    log          a JSONL log written by field_viewer --log
+    --jump-mm    non-physical deviation counted as jitter, mm (default 10)
+                 (default 10.0)
+    --top        how many of the worst jumps to list  (default 8)
 """
 import argparse, json, math, statistics as st, sys
 from collections import Counter
@@ -90,10 +96,12 @@ def describe(rows):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("log")
+    p.add_argument("log",
+                   help="a JSONL log written by field_viewer --log")
     p.add_argument("--jump-mm", type=float, default=10.0,
                    help="non-physical deviation counted as jitter, mm (default 10)")
-    p.add_argument("--top", type=int, default=8)
+    p.add_argument("--top", type=int, default=8,
+                   help="how many of the worst jumps to list")
     a = p.parse_args()
 
     rows = load(a.log)
