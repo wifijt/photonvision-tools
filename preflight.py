@@ -211,6 +211,208 @@ def require_nt(inst, host, seconds=10.0):
 
 
 
+# ---------------------------------------------------------------------------
+# Where the team number lives.
+#
+# Exporting FRC_TEAM works and keeps working, but it lives in one shell. A
+# student who opens a second terminal, or double-clicks a script, or reboots,
+# has lost it - and the failure is a tool timing out against an address it
+# guessed, which looks like a network fault rather than a missing variable.
+# So: ask once, write it down, and never ask again.
+#
+# Precedence is deliberate and is the usual one:
+#     --team on the command line   beats
+#     $FRC_TEAM in this shell      beats
+#     the file
+# An export is a considered act for one terminal - borrowing another team's
+# field, say - and must not be silently overridden by something written weeks
+# ago.
+# ---------------------------------------------------------------------------
+
+#: One file, in the home directory rather than the repo, so it survives a
+#: fresh `git clone` and is shared by every clone on the laptop.
+CONFIG = os.path.join(os.path.expanduser("~"), ".photonvision-tools.conf")
+
+_config_cache = None
+_asked = set()
+
+
+def read_config(path=None):
+    """KEY=value lines from CONFIG. Missing or unreadable file -> {}."""
+    global _config_cache
+    if path is None and _config_cache is not None:
+        return _config_cache
+    out = {}
+    try:
+        with open(path or CONFIG) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    except (IOError, OSError):
+        pass
+    if path is None:
+        _config_cache = out
+    return out
+
+
+def write_config(values, path=None):
+    """Merge `values` into the config file. Returns the path written."""
+    global _config_cache
+    path = path or CONFIG
+    merged = dict(read_config(path))
+    merged.update({k: v for k, v in values.items() if v not in (None, "")})
+    with open(path, "w") as fh:
+        fh.write("# photonvision-tools\n"
+                 "#\n"
+                 "# Written by preflight.py. Edit it by hand if you like, or run\n"
+                 "#     python3 preflight.py --setup\n"
+                 "# A --team flag or an exported FRC_TEAM overrides what is here.\n"
+                 "#\n")
+        for k in sorted(merged):
+            fh.write("%s=%s\n" % (k, merged[k]))
+    _config_cache = merged
+    return path
+
+
+def setting(name):
+    """The value of FRC_TEAM / FRC_PI: environment first, then the file."""
+    return os.environ.get(name) or read_config().get(name) or None
+
+
+def _valid_team(text):
+    """None if the team number is usable, else why not.
+
+    Rejecting 5 digits is not pedantry: team_base() zero-pads to four and
+    splits, so 12345 would silently become 10.12.345, which is not an address.
+    """
+    text = (text or "").strip()
+    if not text.isdigit() or int(text) < 1:
+        return "a team number is digits, like 5459"
+    if len(text.lstrip("0")) > 4:
+        return "FRC team numbers are at most four digits"
+    return None
+
+
+def interactive():
+    """Is there a person here to answer a question?
+
+    Checked BEFORE anything is printed, not after. A cron job, a CI run or a
+    tool with its output piped to a file must not find half a question in its
+    log, and must never block on a prompt nobody will ever type into.
+    """
+    try:
+        return bool(sys.stdin and sys.stdin.isatty()
+                    and sys.stderr and sys.stderr.isatty())
+    except (ValueError, AttributeError):   # closed or replaced streams
+        return False
+
+
+def _ask(prompt, default=None):
+    """Prompt on stderr, read stdin. None if there is nobody to ask.
+
+    stderr, not stdout, so a tool whose output is being piped into a file does
+    not write the question into the data.
+    """
+    if not interactive():
+        return None
+    sys.stderr.write(prompt + (" [%s]: " % default if default else ": "))
+    sys.stderr.flush()
+    try:
+        answer = sys.stdin.readline()
+    except (KeyboardInterrupt, EOFError):
+        sys.stderr.write("\n")
+        return None
+    if answer == "":           # EOF, not an empty line
+        sys.stderr.write("\n")
+        return None
+    answer = answer.strip()
+    return answer or default
+
+
+def ask_team(why=""):
+    """Get a team number, asking and saving if this is a terminal.
+
+    Returns the number as a string, or None when there is nobody to ask - the
+    caller then reports the problem instead of hanging a script forever.
+    """
+    have = setting("FRC_TEAM")
+    if have:
+        return have
+    if "FRC_TEAM" in _asked or not interactive():
+        return None
+    _asked.add("FRC_TEAM")
+    sys.stderr.write("\n%sWhat is your FRC team number?\n"
+                     "  It sets the whole address range: 5459 -> 10.54.59.x,\n"
+                     "  so the roboRIO is 10.54.59.2.\n" % (why + "\n" if why else ""))
+    while True:
+        answer = _ask("  team number")
+        if answer is None:
+            return None
+        bad = _valid_team(answer)
+        if not bad:
+            break
+        sys.stderr.write("  %s\n" % bad)
+    team = str(int(answer))
+    base = team_base(team)
+    sys.stderr.write("  team %s -> %s.x   (roboRIO %s.2, radio %s.1)\n"
+                     % (team, base, base, base))
+
+    pi = setting("FRC_PI")
+    if not pi:
+        sys.stderr.write("\nAnd where does PhotonVision run? Enter to accept the default,\n"
+                         "  or give the Pi's address - %s.12 is a common choice.\n" % base)
+        pi = _ask("  PhotonVision host", "photonvision.local")
+
+    saved = {"FRC_TEAM": team}
+    if pi:
+        saved["FRC_PI"] = pi
+    try:
+        path = write_config(saved)
+        sys.stderr.write("\nSaved to %s - you will not be asked again.\n"
+                         "  Delete that file, or run `python3 preflight.py --setup`, to change it.\n\n"
+                         % path)
+    except (IOError, OSError) as e:
+        sys.stderr.write("\nCould not write %s (%s).\n"
+                         "  Using %s for this run only.\n\n" % (CONFIG, e, team))
+        os.environ["FRC_TEAM"] = team
+        if pi:
+            os.environ["FRC_PI"] = pi
+    return team
+
+
+def setup():
+    """`--setup`: ask both questions again and rewrite the file.
+
+    Takes no `interactive` flag on purpose - that name would shadow the
+    module-level interactive(), which is the one thing in here that must not
+    be ambiguous.
+    """
+    global _config_cache
+    current = read_config()
+    if current:
+        print("current settings in %s:" % CONFIG)
+        for k in sorted(current):
+            print("    %s=%s" % (k, current[k]))
+        print("")
+    _config_cache = {}
+    saved_env = {}
+    for k in ("FRC_TEAM", "FRC_PI"):
+        if k in os.environ:
+            saved_env[k] = os.environ.pop(k)
+    _asked.discard("FRC_TEAM")
+    team = ask_team()
+    os.environ.update(saved_env)
+    if not team:
+        sys.exit("nothing to read from - run this in a terminal, or write %s by hand:\n"
+                 "    FRC_TEAM=5459\n    FRC_PI=10.54.59.12" % CONFIG)
+    for k, v in saved_env.items():
+        print("note: $%s is exported as %s in this shell and still wins here." % (k, v))
+    return team
+
+
 def team_base(team):
     """10.TE.AM from a team number, by the documented FRC rule.
 
@@ -232,49 +434,103 @@ def resolve_host(value, team=None):
         .12             ->  10.TE.AM.12
         anything else   ->  itself
 
-    The team number comes from --team or $FRC_TEAM. Roles that need it and
-    cannot get it say so rather than guessing.
+    The team number comes from --team, then $FRC_TEAM, then the saved config
+    file. A role that needs one and has none ASKS, when there is a terminal to
+    ask, and writes the answer down so it is asked exactly once per laptop. In
+    a script or a cron job there is nobody to ask, so it says what is missing
+    and exits rather than hanging.
     """
     if not value:
         return value
     v = str(value).strip()
     low = v.lower()
     if low in ("pi", "photon", "photonvision", "coprocessor"):
-        return os.environ.get("FRC_PI") or "photonvision.local"
-    team = team or os.environ.get("FRC_TEAM")
+        return setting("FRC_PI") or "photonvision.local"
+    needs_team = low in ("rio", "roborio", "radio") or (
+        v.startswith(".") and v[1:].isdigit())
+    team = team or setting("FRC_TEAM")
+    if needs_team and not team:
+        team = ask_team("'%s' needs a team number." % v)
     if low in ("rio", "roborio", "radio"):
         if not team:
-            sys.exit("'%s' needs a team number: pass --team, or set FRC_TEAM.\n"
-                     "Team 5459 would make the roboRIO 10.54.59.2." % v)
+            sys.exit(_no_team(v))
         return "%s.%d" % (team_base(team), 1 if low == "radio" else 2)
     if v.startswith(".") and v[1:].isdigit():
         if not team:
-            sys.exit("'%s' is a last octet and needs a team number: pass --team, "
-                     "or set FRC_TEAM." % v)
+            sys.exit(_no_team(v))
         return "%s%s" % (team_base(team), v)
     return v
 
 
+def _no_team(value):
+    """What to say when a role needs a team number and nobody can be asked."""
+    return ("'%s' needs a team number, and there is no terminal to ask on.\n\n"
+            "Any one of these fixes it:\n"
+            "    --team 5459                     just this command\n"
+            "    export FRC_TEAM=5459            this shell\n"
+            "    python3 preflight.py --setup    this laptop, once, for good\n\n"
+            "Team 5459 would make the roboRIO 10.54.59.2." % value)
+
+
 def add_team_argument(parser):
-    """`--team`, defaulted from the environment. One line per tool."""
-    parser.add_argument("--team", default=os.environ.get("FRC_TEAM"),
+    """`--team`, defaulted from the environment or the saved file.
+
+    Resolved at parser-build time so `--help` shows the number this laptop
+    will actually use, rather than the word "None".
+    """
+    parser.add_argument("--team", default=setting("FRC_TEAM"),
                         help="FRC team number, so --host can be 'rio' or '.12'. "
-                             "Defaults to $FRC_TEAM.")
+                             "Defaults to $FRC_TEAM, then %s. Asked for once "
+                             "and remembered if neither is set." % CONFIG)
 
 if __name__ == "__main__":
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__)
+        print("USAGE\n"
+              "    python3 preflight.py [--setup] [--show] [--team=N] [host[:port] ...]\n\n"
+              "OPTIONS\n"
+              "    --setup       ask for the team number and the Pi, and save them to\n"
+              "                  %s. Run it once per laptop.\n"
+              "    --show        print the saved settings and where they came from\n"
+              "    --team=N      use this team number for this run only\n"
+              "    host[:port]   also check these; default is rio:5810 and pi:5800\n"
+              % CONFIG)
+        sys.exit(0)
+
+    if "--setup" in sys.argv:
+        setup()
+        sys.exit(0)
+
+    if "--show" in sys.argv:
+        print("config file: %s%s" % (CONFIG, "" if os.path.exists(CONFIG) else "   (does not exist yet)"))
+        for k in ("FRC_TEAM", "FRC_PI"):
+            env, filed = os.environ.get(k), read_config().get(k)
+            if env:
+                print("  %-9s %-20s from $%s (overrides the file)" % (k, env, k))
+            elif filed:
+                print("  %-9s %-20s from the file" % (k, filed))
+            else:
+                print("  %-9s %-20s run --setup" % (k, "not set"))
+        sys.exit(0)
+
     print("interpreter:")
     print(interpreter())
     note = conda_mismatch()
     print("\nconda: " + (note if note else "running the activated environment (or none)"))
     print("\nlocal address: %s" % (local_address() or "unknown"))
-    team = os.environ.get("FRC_TEAM")
+    team = setting("FRC_TEAM")
     args = [a for a in sys.argv[1:] if not a.startswith("--team=")]
     for a in sys.argv[1:]:
         if a.startswith("--team="):
             team = a.split("=", 1)[1]
+    if not team:
+        team = ask_team("A team number is what turns 'rio' into an address.")
     if team:
-        print("\nteam %s -> %s.x   (roboRIO %s.2, radio %s.1)"
-              % (team, team_base(team), team_base(team), team_base(team)))
+        src = ("$FRC_TEAM" if os.environ.get("FRC_TEAM") == str(team)
+               else CONFIG if read_config().get("FRC_TEAM") == str(team)
+               else "--team")
+        print("\nteam %s -> %s.x   (roboRIO %s.2, radio %s.1)   [from %s]"
+              % (team, team_base(team), team_base(team), team_base(team), src))
     if not args:
         args = ["rio:5810", "pi:5800"] if team else ["pi:5800"]
         print("checking the usual two; name others as host[:port]")

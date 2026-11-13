@@ -20,17 +20,22 @@ error — it produces confident wrong numbers.
   everything that reads a robot pose or the gyro talks to this. By the FRC
   rule it is always `10.TE.AM.2` - for team 5459, `10.54.59.2`.
 
-Set these once per terminal and then never type an address again:
+Say that once per laptop and then never type an address again:
 
 ```sh
-export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459
-export FRC_PI=10.54.59.12         # Windows:  set FRC_PI=10.54.59.12
+python3 preflight.py --setup
 ```
 
-Every tool then takes `--host rio` or `--host pi` and works out the rest — all
-13 of them, plus `--host .12` for any last octet and `--team` to override
-`$FRC_TEAM` for one command. Use `setx` instead of `set` on Windows to make it
-stick across terminals.
+Two questions, saved to `~/.photonvision-tools.conf`. Every tool then takes
+`--host rio` or `--host pi` and works out the rest — all 13 of them, plus
+`--host .12` for any last octet.
+
+If a laptop was missed, nothing breaks: the first tool that needs the team
+number asks the same two questions, saves them and carries on. Do it on every
+student laptop before they arrive and that interruption never happens.
+
+For one afternoon on somebody else's field, `export FRC_TEAM=254` beats the
+file for that terminal, and `--team 254` beats both for one command.
 
 Check both boxes before anything else:
 

@@ -83,17 +83,28 @@ pip install -r requirements.txt -r requirements-survey.txt
 
 No internet? See [SETUP.md](SETUP.md), section 0c for Windows, 0b for offline.
 
-### Then say the team number once, per terminal
+### Then say the team number once, per laptop
 
 ```sh
-export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459  (setx to keep it)
-export FRC_PI=10.54.59.12         # the Pi running PhotonVision
+python3 preflight.py --setup
 ```
 
-Every tool then takes `--host rio` or `--host pi` and works the address out —
-`rio` is `10.TE.AM.2`, `pi` is `$FRC_PI`. Nobody types an IP under pressure, and
-nobody gets the roboRIO and the Pi the wrong way round, which is the single most
-expensive mistake in this repo.
+It asks two questions — your team number, and where PhotonVision runs — and
+writes the answers to `~/.photonvision-tools.conf`. That is the last time anyone
+on this laptop types an address.
+
+Every tool then takes `--host rio` or `--host pi` and works the rest out: `rio`
+is `10.TE.AM.2`, `pi` is the Pi you named. Nobody types an IP under pressure,
+and nobody gets the roboRIO and the Pi the wrong way round, which is the single
+most expensive mistake in this repo.
+
+> **Forgot to run it?** Nothing breaks. The first tool that needs a team number
+> asks the same two questions, saves them, and carries straight on. Setting up
+> ten student laptops means running `--setup` ten times or just letting the
+> first tool ask — same file either way.
+>
+> Borrowing another team's field for an afternoon? `export FRC_TEAM=254`
+> overrides the file for that terminal only, and `--team 254` for one command.
 
 ### And check, before anyone walks to the robot
 

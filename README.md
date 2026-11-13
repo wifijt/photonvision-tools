@@ -396,8 +396,47 @@ work on a machine where nothing is installed yet, since diagnosing exactly that
 is half its job.
 
 ```sh
-export FRC_TEAM=5459              # Windows:  set FRC_TEAM=5459  (setx to keep it)
-export FRC_PI=10.54.59.12         # where PhotonVision actually lives
+python3 preflight.py --setup      # asks twice, once, ever
+python3 preflight.py              # then this, before every session
+```
+
+`--setup` asks for the team number and where PhotonVision runs, and writes both
+to `~/.photonvision-tools.conf`. Every tool reads it. Nobody exports anything,
+nobody types an address, and a student who opens a second terminal or reboots
+still has it.
+
+```
+What is your FRC team number?
+  It sets the whole address range: 5459 -> 10.54.59.x,
+  so the roboRIO is 10.54.59.2.
+  team number: 5459
+  team 5459 -> 10.54.59.x   (roboRIO 10.54.59.2, radio 10.54.59.1)
+
+And where does PhotonVision run? Enter to accept the default,
+  or give the Pi's address - 10.54.59.12 is a common choice.
+  PhotonVision host [photonvision.local]: 10.54.59.12
+
+Saved to /Users/you/.photonvision-tools.conf - you will not be asked again.
+```
+
+You never have to run `--setup` deliberately: **any** tool that needs a team
+number and cannot find one asks those same two questions, saves the answers and
+carries on with what you asked it to do. `--show` prints what is saved and where
+each value came from.
+
+Exports still work and still win — `export FRC_TEAM=254` for one terminal when
+you are on somebody else's field is a considered act, and nothing written weeks
+ago should override it.
+
+| where you set it | how long it lasts |
+|---|---|
+| `--team 5459` | this command |
+| `export FRC_TEAM=5459` | this terminal |
+| `~/.photonvision-tools.conf` | this laptop, for good |
+
+Highest wins. Then, before every session:
+
+```sh
 python3 preflight.py
 ```
 
@@ -410,7 +449,7 @@ conda: running the activated environment (or none)
 
 local address: 10.54.59.137
 
-team 5459 -> 10.54.59.x   (roboRIO 10.54.59.2, radio 10.54.59.1)
+team 5459 -> 10.54.59.x   (roboRIO 10.54.59.2, radio 10.54.59.1)   [from ~/.photonvision-tools.conf]
 
 rio = 10.54.59.2             :5810  OK           (connected)
 pi = 10.54.59.12             :5800  UNREACHABLE  (timed out)
@@ -425,6 +464,11 @@ Name other boxes as `host[:port]` — `python3 preflight.py pi:5800 rio:1735`.
 | a script launched outside its conda env | `import ntcore` fails while the same import works in a REPL two inches away |
 | the laptop is not on the robot network | the tool connects to nothing and records zero rows, looking like a camera fault |
 | a missing package imported deep in a function | the error arrives a hundred lines after argument parsing, robot already in position |
+
+In a cron job, a CI run, or anything with its output piped to a file there is
+nobody to ask, so nothing is asked — no half-written question in a log, no
+script blocked forever on a prompt it will never receive. It names the three
+ways to supply a team number and exits non-zero.
 
 The conda one is worth spelling out: `conda activate` sets `CONDA_PREFIX` **in
 the shell**. A script started through its shebang, a Windows file association or
