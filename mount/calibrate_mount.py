@@ -192,9 +192,45 @@ MOTIONS = {
 }
 
 
+def _need_nt():
+    """Import the NetworkTables stack, or explain how to get it.
+
+    These live behind a function because `solve` reads a .npz and needs
+    neither, so a laptop that only crunches recordings never has to install
+    them. The cost of that is a bare ModuleNotFoundError arriving in the
+    middle of `record` - after the robot is positioned and the countdown has
+    run - so `record` calls this FIRST, before it asks anyone to drive
+    anything.
+    """
+    try:
+        import ntcore
+        from photonlibpy.photonCamera import PhotonCamera
+        return ntcore, PhotonCamera
+    except ImportError as e:
+        sys.exit(
+            "%s\n\n"
+            "The interpreter that failed is:\n"
+            "    %s\n"
+            "    Python %s\n"
+            "If `import ntcore` works in a REPL, run that same REPL's\n"
+            "`import sys; print(sys.executable)` and compare. A different\n"
+            "path means two environments, and the install went to the other\n"
+            "one. Same path means the module really is absent here.\n\n"
+            "`record` talks to NetworkTables and needs pyntcore + photonlibpy:\n"
+            "    python -m pip install -r requirements.txt -r requirements-nt.txt\n\n"
+            "Use `python -m pip`, not a bare `pip` - under conda they are\n"
+            "routinely different environments, so the install reports success\n"
+            "and the import still fails. Check with:\n"
+            "    python -c \"import sys; print(sys.executable)\"\n\n"
+            "pyntcore ships wheels for Python 3.10-3.14 only and declares no\n"
+            "requires_python, so on 3.9 pip reports 'could not find a version\n"
+            "that satisfies the requirement' instead of naming the real cause.\n\n"
+            "`solve` needs none of this - recordings already made still crunch."
+            % (e, sys.executable, sys.version.split()[0]))
+
+
 def record(path, seconds, host, names, gyro_topic=None, motion="spin"):
-    import ntcore
-    from photonlibpy.photonCamera import PhotonCamera
+    ntcore, PhotonCamera = _need_nt()
     inst = ntcore.NetworkTableInstance.getDefault()
     inst.startClient4("mount-cal")
     inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
