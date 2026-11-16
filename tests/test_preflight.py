@@ -264,6 +264,39 @@ def test_require_nt_names_the_right_interface():
     check("falls back to 8.8.8.8 for a NAME", calls2, ["8.8.8.8"])
 
 
+def test_loopback_message():
+    """Loopback gets a different explanation, because the network is not it.
+
+    "Check this machine is on the robot network: 127.0.0.1" sent a reader to
+    inspect the one thing that cannot be the cause. On loopback there is one
+    explanation left - nothing is serving NT here - and the message says so.
+    """
+    print("\nrequire_nt - loopback says the right thing")
+    fresh()
+
+    class NeverConnects(object):
+        def isConnected(self):
+            return False
+
+    for host in ("127.0.0.1", "localhost", "127.0.1.1"):
+        check("is_loopback(%s)" % host, pf.is_loopback(host), True)
+    for host in ("10.54.59.12", "photonvision.local", "", None):
+        check("is_loopback(%r) false" % host, pf.is_loopback(host), False)
+
+    try:
+        pf.require_nt(NeverConnects(), "127.0.0.1", seconds=0.01)
+        check("raises", "returned", "SystemExit"); return
+    except SystemExit as e:
+        msg = str(e)
+    check("does NOT blame the network",
+          "on the robot network" in msg, False)
+    check("says nothing is serving here",
+          "nothing is serving NetworkTables here" in msg, True)
+    check("names the UI toggle", "Run NetworkTables Server" in msg, True)
+    check("warns to turn it off for a roboRIO", "both go quiet" in msg, True)
+    check("still reports the wait", "0.01s" in msg, True)
+
+
 def test_non_interactive():
     """A piped or scheduled run must not print half a question."""
     print("\ninteractive() - nobody to ask")
@@ -276,6 +309,7 @@ if __name__ == "__main__":
     for fn in (test_team_base, test_roles, test_precedence, test_no_team,
                test_validation, test_file, test_require_nt_message,
                test_require_nt_names_the_right_interface,
+               test_loopback_message,
                test_non_interactive):
         fn()
     print("")

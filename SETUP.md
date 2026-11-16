@@ -365,6 +365,42 @@ python3 /opt/photontune/photontune.py --help
 python3 /opt/photontune/photontune.py            # a real tune, ~45 s
 ```
 
+### And a status command on the Pi itself
+
+Once photontune is a service you will want to ask, from the Pi, what it last
+decided — without a laptop and without a checkout. From the repo root on a
+laptop:
+
+```sh
+sh setup/install_photontune_status.sh photon@10.54.59.12
+```
+
+That puts `preflight.py` and `photontune_status.py` in `/opt/photontune` and a
+`photontune-status` wrapper in `/usr/local/bin`. It touches no service and
+restarts nothing; re-running it is how you upgrade. Then, on the Pi:
+
+```sh
+photontune-status              # the last tune, and the boot baseline
+photontune-status --watch      # follow a tune while it runs
+photontune-status --host rio   # on a robot
+```
+
+**Why this is not a `journalctl` command.** photontune writes no results file,
+and the journal carries only the boot baseline — a line per camera saying the
+exposure it asserted. The *sweep's* answer is published to the `/PhotonTune`
+NetworkTables table as `summary`, `ok`, `warnings` and `result` (full JSON), and
+if nothing reads that table the answer is gone when the daemon restarts. So
+`journalctl -u photontune` hands you the baseline's answer, which looks like a
+plausible answer to "what did the tune choose?" and is a different question.
+
+**It needs an NT server to exist**, because photontune is only ever a client —
+deliberately, since PhotonVision's server-management API restarts the web server
+and drops every websocket, which would destroy the tool's own control channel.
+On a robot that server is the roboRIO. On a bench, PhotonVision's own NT server
+has to be on, and **off again before the box meets a roboRIO** or the two
+servers fight and both go quiet. The tool reports a missing server and never
+turns one on.
+
 Then the unit, `/etc/systemd/system/photontune.service`:
 
 ```ini

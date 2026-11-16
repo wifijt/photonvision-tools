@@ -62,7 +62,13 @@ OPTIONS
                   and remembered if neither is set.
 """
 import os as _os, sys as _sys
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# The repo layout puts preflight.py one directory up. This file is ALSO
+# installed flat on the Pi, in /opt/photontune, where preflight sits beside it
+# - so look in both, own directory first.
+_here = _os.path.dirname(_os.path.abspath(__file__))
+for _d in (_here, _os.path.dirname(_here)):
+    if _d not in _sys.path:
+        _sys.path.insert(0, _d)
 import preflight
 
 import argparse

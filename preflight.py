@@ -203,17 +203,37 @@ def require_nt(inst, host, seconds=10.0):
     # not str". The one path whose entire job is to explain an NT failure
     # raised a traceback instead, on what is the commonest failure there is.
     # Formatted once and checked, rather than inlined into sys.exit().
+    head = ("NetworkTables never connected to %s (waited %gs).\n\n"
+            "startClient4() does not fail on a bad address - it just never\n"
+            "receives anything, which is why this is checked rather than "
+            "assumed.\n\n" % (host, seconds))
+    if is_loopback(host):
+        # Asking someone to check their network cable when they asked for
+        # 127.0.0.1 sends them to look at the one thing that cannot be wrong.
+        # On loopback there is exactly one explanation left.
+        sys.exit(head +
+                 "The server was meant to be on THIS machine, so this is not a\n"
+                 "network problem - nothing is serving NetworkTables here.\n\n"
+                 "  - PhotonVision's own NT server is OFF. Turn it on in the UI\n"
+                 "    (Settings -> Networking -> 'Run NetworkTables Server'), or\n"
+                 "    with config/set_nt_server.py true.\n"
+                 "  - Turn it OFF again before this box meets a roboRIO, or the\n"
+                 "    two servers fight and both go quiet.\n"
+                 "  - On a robot, the server is the roboRIO: pass --host rio.")
     mine = local_address(host if _looks_numeric(host) else "8.8.8.8")
-    sys.exit(
-        "NetworkTables never connected to %s (waited %gs).\n\n"
-        "startClient4() does not fail on a bad address - it just never\n"
-        "receives anything, which is why this is checked rather than assumed.\n\n"
-        "  - On a robot the NT server is the roboRIO, not the Pi.\n"
-        "  - Off a robot, PhotonVision's own NT server must be ON\n"
-        "    (config/set_nt_server.py true), and it must be OFF whenever a\n"
-        "    roboRIO is present, or the two servers fight and both go quiet.\n"
-        "  - Check this machine is on the robot network: %s"
-        % (host, seconds, mine or "could not determine this machine's address"))
+    sys.exit(head +
+             "  - On a robot the NT server is the roboRIO, not the Pi.\n"
+             "  - Off a robot, PhotonVision's own NT server must be ON\n"
+             "    (config/set_nt_server.py true), and it must be OFF whenever a\n"
+             "    roboRIO is present, or the two servers fight and both go quiet.\n"
+             "  - Check this machine is on the robot network: %s"
+             % (mine or "could not determine this machine's address"))
+
+
+def is_loopback(host):
+    """Is `host` this machine? Covers the spellings people actually type."""
+    h = str(host or "").strip().lower()
+    return h in ("localhost", "::1", "0.0.0.0") or h.startswith("127.")
 
 
 
