@@ -182,8 +182,8 @@ def test_verdict_cases():
           "No tune RECORDED" in v, True)
     check("baseline ran: does NOT assert no tune happened",
           "NO TUNE since last boot" in v, False)
-    check("baseline ran: says a hand-run tune is invisible",
-          "run by hand is not" in v, True)
+    check("baseline ran: says a hand-run tune would be invisible",
+          "INVISIBLE" in v, True)
     check("baseline only: not ready", ready(mkjournal(
         "baseline for 2 camera(s): Left, Right", CAM_L,
         "boot baseline done in 1 s: ok=True")), False)
@@ -320,7 +320,12 @@ def test_local_log_absent_is_not_an_error():
     print("\nlocal_log - a missing file")
     rows, note = pts.local_log("/nonexistent/photontune.log")
     check("no rows", rows, [])
-    check("and no complaint", note, "")
+    # Deliberately NOT "": an absent log is not a successful read of an empty
+    # one. Conflating the two let the tool claim no tune had happened when it
+    # simply had no way to know. That was the lie.
+    check("says there is no log yet", "no log at" in note, True)
+    check("and therefore is NOT counted as seeing hand runs",
+          note == "", False)
 
 
 def test_merge():
@@ -374,13 +379,126 @@ def test_caveat_depends_on_the_local_log():
                      "   baseline: already correct",
                      "boot baseline done in 1 s: ok=True Left: already correct")
     blind, _r = pts.verdict(base, "", now=NOW, local_seen=False)
-    check("no local log: warns a hand run is unseen",
-          "run by hand is not" in blind, True)
+    check("no local log: warns a hand run would be INVISIBLE",
+          "INVISIBLE" in blind, True)
+    check("no local log: tells the reader not to misread it",
+          "Do not read this as" in blind, True)
     seen, _r = pts.verdict(base, "", now=NOW, local_seen=True)
     check("local log present: does NOT warn",
-          "run by hand is not" in seen, False)
+          "INVISIBLE" in seen, False)
     check("local log present: says to run photontune",
           "run `photontune` to do one" in seen, True)
+
+
+#: A real failing run, 2026-11-16, abridged. Kept verbatim because this is the
+#: run that exposed the lie: it happened, it FAILED, and the status tool said
+#: "No tune since boot - run `photontune` to do one".
+REAL_FAILED_RUN = [
+    "photontune run started: ",
+    "tuning 2 camera(s): Left, Right",
+    "   no NetworkTables server at photonvision.local or 127.0.0.1 (8.3 s spent looking)",
+    "\u2500\u2500 Left \u2500\u2500  current exposure 3453.9974841568746, gain 60",
+    "   baseline: already correct",
+    "   reference  gain 100  exposure    863  tags 0.00  ambiguity n/a  (no multitag)",
+    "       gain 100  exposure   1727  tags 0.00  ambiguity n/a  (no multitag)",
+    "   even gain 100 cannot see the tags at 863 us - the scene is too dark for the blur budget.",
+    "   !! no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us, and neither a "
+    "shorter nor a longer exposure did. That is a LIGHTING or CONFIG problem.",
+    "\u2500\u2500 Right \u2500\u2500  current exposure 3438.8577861772997, gain 40",
+    "   baseline: already correct",
+    "   even gain 100 cannot see the tags at 860 us - the scene is too dark for the blur budget.",
+    "completed in 114 s",
+    "  Left           unchanged (nothing worked at any gain or exposure)",
+    "  Right          unchanged (nothing worked at any gain or exposure)",
+    "FAILED Left: no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us",
+    "FAILED Right: no gain from [0, 20, 40, 60, 80, 100] saw the tags at 860 us",
+    "photontune run finished",
+]
+
+
+def test_the_run_that_caught_the_lie():
+    """A failed tune must be reported as a failed tune.
+
+    The tuner is run as `python3 /opt/photontune/photontune.py`, which is what
+    the docs show and what people type. It now logs itself, so this is what
+    the status tool sees. Before, it saw nothing and claimed no tune had
+    happened - the single worst answer available, because a student would read
+    it as "nothing to worry about" when both cameras had just failed to see a
+    single tag at any gain or exposure.
+    """
+    print("\nverdict - the real failed run from 2026-11-16")
+    rows = pts.parse_local(
+        "".join("%s %s\n" % (STAMP, m) for m in REAL_FAILED_RUN))
+    check("the whole run parses", len(rows), len(REAL_FAILED_RUN))
+    check("the tuner's own banner anchors the run",
+          "photontune run started" in pts.last_run(rows)[0][0][1], True)
+
+    line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
+    check("reported as FAILED", "FAILED" in line, True)
+    # The bench had no tag in view, which the user confirmed. A flat 0.00 at
+    # every gain AND either exposure is "nothing to see", not "too dark" -
+    # reporting it as light sends somebody to fetch lamps.
+    check("says NO TAGS SEEN, not 'too dark'",
+          "NO TAGS SEEN at any gain or exposure" in line, True)
+    check("does NOT blame the light outright",
+          "light levels TOO LOW" in line, False)
+    check("asks the question that actually resolves it",
+          "Is a tag actually in view?" in line, True)
+    check("says when", "13 min ago" in line, True)
+    check("NOT reported as ready", ready, False)
+    check("does NOT claim no tune happened",
+          "No tune" in line, False)
+    check("does NOT claim it was only a baseline",
+          "baseline" in line.lower(), False)
+
+
+def test_a_missing_log_never_claims_no_tune():
+    """The actual bug, as a test. 'No error' is not 'I have the data'.
+
+    local_log returned ("", []) for a file that did not exist, main turned
+    that into local_seen=True, and verdict took that as licence to assert "No
+    tune since boot". Three states - log read with runs, log read empty, log
+    absent - were collapsed into two.
+    """
+    print("\nverdict - a missing local log must not license a confident negative")
+    rows, note = pts.local_log("/nonexistent/dir/photontune.log")
+    check("absent log yields a note, not silence", bool(note), True)
+    seen = (note == "")
+    check("so local_seen is False", seen, False)
+
+    base = mkjournal("baseline for 2 camera(s): Left, Right", CAM_L,
+                     "   baseline: already correct",
+                     "boot baseline done in 1 s: ok=True Left: already correct")
+    line, _r = pts.verdict(base, "", now=NOW, local_seen=seen)
+    check("the line does NOT assert no tune happened",
+          "No tune since boot" in line, False)
+    check("it says a hand run would be invisible", "INVISIBLE" in line, True)
+    check("and warns against misreading it",
+          "Do not read this as" in line, True)
+
+
+def test_dim_tags_are_not_the_same_as_no_tags():
+    """Falling tag counts mean dim. A flat zero everywhere means absent."""
+    print("\nverdict - dim tags vs no tags")
+    # Dim: the walk gave up at the top of the gain range, but the exposure
+    # walk was never reported as also failing.
+    dim = mkjournal(CAM_L,
+                    "   even gain 100 cannot see the tags at 863 us - the scene is too dark")
+    v, _r = pts.verdict(dim, "", local_seen=True, now=NOW)
+    check("dim: reported as light levels too low",
+          "light levels TOO LOW for competition" in v, True)
+    check("dim: does not ask about tags being in view",
+          "Is a tag actually in view?" in v, False)
+
+    # Absent: the full sweep failed, both directions.
+    gone = mkjournal(CAM_L,
+                     "   even gain 100 cannot see the tags at 863 us",
+                     "   !! no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us, "
+                     "and neither a shorter nor a longer exposure did.")
+    v, _r = pts.verdict(gone, "", local_seen=True, now=NOW)
+    check("absent: reported as NO TAGS SEEN", "NO TAGS SEEN" in v, True)
+    check("absent: still mentions dark as the fallback explanation",
+          "too dark for any setting" in v, True)
 
 
 if __name__ == "__main__":
@@ -390,7 +508,10 @@ if __name__ == "__main__":
                test_uptime_overrides_a_lying_clock, test_parse_local,
                test_local_log_absent_is_not_an_error, test_merge,
                test_manual_run_is_an_anchor,
-               test_caveat_depends_on_the_local_log):
+               test_caveat_depends_on_the_local_log,
+               test_the_run_that_caught_the_lie,
+               test_a_missing_log_never_claims_no_tune,
+               test_dim_tags_are_not_the_same_as_no_tags):
         fn()
     print("")
     if FAILED:

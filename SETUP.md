@@ -409,6 +409,20 @@ gain 20 or below means the scene had light to spare, 80 or above means it barely
 worked, and a refusal means it did not work at all. Nothing here is inferred
 from a metric photontune does not publish.
 
+**"No tags" and "too dark" are reported separately**, because they need
+opposite actions. Tags that are present but dim give *falling* tag counts as
+light runs out. A flat `tags 0.00` at every gain from 0 to 100 *and* at a
+shorter and a longer exposure means nothing was in frame to see:
+
+```
+tune FAILED 2 min ago - NO TAGS SEEN at any gain or exposure. Is a tag
+actually in view? If it is, the scene is too dark for any setting
+```
+
+photontune's own summary lumps both together as "a LIGHTING or CONFIG problem".
+Reporting that as "light levels too low" sent somebody to fetch lamps when a
+bench simply had no tag pointed at the camera.
+
 **And the one safety item is always appended**, whatever else the line says:
 
 ```
@@ -443,22 +457,38 @@ tuning... (~45 s; -v to watch, log in /var/log/photontune/photontune.log)
 Photon tune status: tune ran just now, light levels optimal, applied to Left and Right
 ```
 
-**Every run is logged locally**, to `/var/log/photontune/photontune.log`, with a
-timestamp on every line. This matters more than it sounds: journald captures
-only the *service's* output and photontune writes no logfile of its own, so
-before this a tune somebody ran by hand printed to their terminal and was
-recorded **nowhere**. Ask afterwards what the cameras were set to and the honest
-answer was "nobody knows". `photontune-status` reads both the journal and this
-log and merges them, so it no longer matters who started a tune or how.
+**Every run is logged locally**, to `/var/log/photontune/photontune.log`, with
+a timestamp on every line — **including** a raw
+
+```sh
+python3 /opt/photontune/photontune.py
+```
+
+because the logging lives in **the tuner**, not in the wrapper. That distinction
+cost a real failure: the first version logged from the wrapper, which only
+records runs that go through it, and the raw path above is the one people
+actually type (this document shows it). A tune run that way failed on both
+cameras — no gain in `[0, 20, 40, 60, 80, 100]` saw a single tag at any exposure
+— and `photontune-status`, reading only the journal, answered **"No tune since
+boot"**. A student reads that as nothing to worry about.
+
+`photontune-status` reads the journal and this log and merges them, so it no
+longer matters who started a tune or how. `$PHOTONTUNE_LOG` moves the file,
+`$PHOTONTUNE_NO_LOG` disables it.
 
 Rotation is installed too (`/etc/logrotate.d/photontune`, 2 MB, keep 4) — an
 unrotated log on a box that gets power-cycled by yanking the plug is how an SD
 card dies.
 
-The wrapper carries the tuner's exit status through the pipe deliberately.
-`/bin/sh` has no `pipefail`, so without that a failed tune behind a successful
-log-writer would look like success, and the log would record a tune that passed
-when it did not.
+**And when there is no log at all, the tool now says so** rather than inferring
+that nothing happened. Those are different claims, and conflating them is what
+produced the wrong answer above:
+
+```
+... No tune RECORDED since boot - and there is no local log here, so a tune
+somebody ran by hand would be INVISIBLE to this. Do not read this as
+'no tune happened'
+```
 
 ### The other way: ask the service
 

@@ -272,7 +272,12 @@ def local_log(path=LOCAL_LOG, lines=4000, ssh=None, key=None):
     if proc.returncode != 0:
         detail = (err or b"").decode("utf-8", "replace").strip()
         if "No such file" in detail:
-            return [], ""          # nothing has been run by hand: not an error
+            # NOT an empty string. An absent log means "no tune has ever been
+            # recorded here", which is completely different from "I read the
+            # log and it was empty". Returning "" made local_seen True, which
+            # turned off the cautious wording and let this tool assert "No tune
+            # since boot" about a tune that had just run and FAILED.
+            return [], "no log at %s yet" % path
         return [], detail.splitlines()[-1] if detail else "tail failed"
     return parse_local(out.decode("utf-8", "replace")), ""
 
@@ -335,7 +340,8 @@ def last_run(rows):
     anchors = [i for i, (_t, m) in enumerate(rows)
                if m.startswith("@@BOOT")
                or "Started photontune.service" in m
-               or "photontune manual run started" in m]
+               or "photontune run started" in m          # the tuner's own banner
+               or "photontune manual run started" in m]   # the old wrapper's
     decisive = [(t, m) for t, m in rows
                 if not m.startswith("@@BOOT")
                 and any(k.lower() in m.lower() for k in DECISIVE)]
@@ -429,8 +435,9 @@ GAIN_MARGINAL = 80.0    # at or above: running out of range
 #: recorded NOWHERE this tool can see. "NO TUNE since last boot" was therefore
 #: a claim about the world made from one of the two places a tune can happen.
 #: It is now a claim about the record, which is all the record can support.
-NOT_RECORDED = ("No tune RECORDED since boot - note a tune run by hand is not "
-                "logged, so this cannot see it")
+NOT_RECORDED = ("No tune RECORDED since boot - and there is no local log here, "
+                "so a tune somebody ran by hand would be INVISIBLE to this. "
+                "Do not read this as 'no tune happened'")
 #: ...but once the wrapper's log exists, hand runs ARE recorded, and the caveat
 #: above would be stale reassurance in the wrong direction - telling someone a
 #: tune might have happened invisibly when it could not have.
@@ -438,6 +445,18 @@ NOT_RUN = "No tune since boot - run `photontune` to do one"
 
 #: Phrases photontune logs when the scene defeats it outright.
 TOO_DARK = ("cannot see the tags", "cannot work at", "scene is too")
+
+#: The whole sweep saw nothing: every gain AND a shorter and a longer exposure.
+#:
+#: This is NOT the same as "too dark" and must not be reported as it. Tags that
+#: are present but dim give FALLING tag counts as light runs out; a flat 0.00
+#: across every gain from 0 to 100 and every exposure either side means nothing
+#: was in frame to see. The tuner's own line says "a LIGHTING or CONFIG problem"
+#: without separating them, and a run on a bench with no tag in view was
+#: reported as "light levels TOO LOW for competition" - which sends somebody to
+#: add lights when the answer is to point a camera at a tag.
+NOTHING_SEEN = ("and neither a shorter nor a longer exposure did",
+                "nothing worked at any gain or exposure")
 #: ...and when it cannot find what it was told to tune.
 NO_CAMERA = ("no cameras reported by photonvision", "no camera matched",
              "no cameras", "no camerasettings")
@@ -580,6 +599,11 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
             return ("ERROR %s camera NOT FOUND (%s)"
                     % (named.group(1).strip(), when)) + danger, False
         return ("ERROR cameras not found (%s)" % when) + danger, False
+
+    if any(k in text for k in NOTHING_SEEN):
+        return ("tune FAILED %s - NO TAGS SEEN at any gain or exposure. Is a "
+                "tag actually in view? If it is, the scene is too dark for any "
+                "setting" % when) + danger, False
 
     if any(k in text for k in TOO_DARK):
         return ("tune FAILED %s - light levels TOO LOW for competition" % when) + danger, False
@@ -912,10 +936,8 @@ def main():
     sources = ["systemd journal (the service)"]
     if local:
         sources.append("%s (%d lines, runs by hand)" % (a.log, len(local)))
-    elif local_note:
-        sources.append("%s unreadable: %s" % (a.log, local_note))
     else:
-        sources.append("%s absent - nothing run by hand yet" % a.log)
+        sources.append(local_note or "%s empty" % a.log)
     print("on %s: %s" % (where, ", ".join(sources)))
     print("NetworkTables at %s\n" % a.host)
 

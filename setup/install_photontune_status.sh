@@ -102,8 +102,10 @@ ssh $SSH_OPTS "$TARGET" "set -e
     sudo chmod 644 /opt/photontune/preflight.py
     sudo chmod 755 /opt/photontune/photontune_status.py \
                    /usr/local/bin/photontune-status /usr/local/bin/photontune
-    # The log has to be writable by whoever runs a tune, not only by root, or
-    # the wrapper falls back to sudo on every single run.
+    # photontune.py writes here on every run, including a raw
+    # `python3 /opt/photontune/photontune.py`. It must be writable by whoever
+    # runs a tune, not only by root, or the tuner prints a note and carries on
+    # unlogged - which is exactly the hole this closes.
     sudo mkdir -p /var/log/photontune
     sudo chown \$(id -un) /var/log/photontune
     # And it must not fill the SD card. An unrotated log on a box that is
