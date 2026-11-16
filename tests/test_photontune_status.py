@@ -622,6 +622,49 @@ def test_a_failure_cannot_erase_a_success():
         check("not ready (%s...)" % reason[:22], ready, False)
 
 
+def test_a_service_restart_is_not_a_reboot():
+    """"Since boot" must not be said about a box that has not rebooted.
+
+    Observed 2026-11-16 within a minute of installing a new tuner: the Pi had
+    been up 4 h 45, had been tuned three times in that, and the status line
+    read "No tune since boot". The daemon had been restarted, not the box.
+
+    The anchor cannot tell them apart on its own, because at boot the journal
+    holds the boundary AND the service start, service start second - so the
+    anchor is a service start either way. Counting starts since the boundary
+    can: one is the boot-time start, two or more means somebody restarted it.
+    """
+    print("\nsince - a restart is not a reboot")
+    boot_only = [(STAMP, "@@BOOT 1111"),
+                 (STAMP, "Started photontune.service - PhotonTune"),
+                 (STAMP, "boot baseline done in 1 s: ok=True L: already correct")]
+    check("one start after the boundary reads as boot",
+          pts._since(boot_only), "boot")
+
+    restarted = boot_only + [
+        (STAMP, "Started photontune.service - PhotonTune"),
+        (STAMP, "boot baseline done in 1 s: ok=True L: already correct")]
+    check("a second start reads as a restart",
+          pts._since(restarted), "photontune restarted")
+
+    # And it must reach the line a human reads.
+    line, _r = pts.verdict(boot_only, "", local_seen=True, now=NOW)
+    check("boot: line says since boot", "since boot" in line, True)
+    line, _r = pts.verdict(restarted, "", local_seen=True, now=NOW)
+    check("restart: line says since photontune restarted",
+          "since photontune restarted" in line, True)
+    check("restart: does NOT say since boot", "since boot" in line, False)
+
+    # A later boot boundary resets the count - a reboot after a restart is
+    # still a reboot, and the restarts belonged to the previous boot.
+    rebooted = restarted + [
+        (STAMP, "@@BOOT 2222"),
+        (STAMP, "Started photontune.service - PhotonTune"),
+        (STAMP, "boot baseline done in 1 s: ok=True L: already correct")]
+    check("a boundary after the restarts reads as boot again",
+          pts._since(rebooted), "boot")
+
+
 if __name__ == "__main__":
     for fn in (test_parse, test_last_run_anchors_on_the_boundary, test_decisive,
                test_no_boundary_means_one_run, test_journal_without_journalctl,
@@ -634,7 +677,8 @@ if __name__ == "__main__":
                test_a_missing_log_never_claims_no_tune,
                test_dim_tags_are_not_the_same_as_no_tags,
                test_one_camera_tuned_the_other_did_not,
-               test_a_failure_cannot_erase_a_success):
+               test_a_failure_cannot_erase_a_success,
+               test_a_service_restart_is_not_a_reboot):
         fn()
     print("")
     if FAILED:

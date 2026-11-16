@@ -351,6 +351,33 @@ def last_run(rows):
     return rows[anchors[-1]:], decisive
 
 
+def _since(rows):
+    """What "since ..." means for the run last_run picked: boot, or a restart.
+
+    last_run anchors on the newest of a boot boundary or a `Started
+    photontune.service` line, and those are NOT the same event. At boot the
+    journal holds both, the service line second, so the anchor is a service
+    start either way and the distinction cannot be made from the anchor alone.
+
+    It can be made by counting: starts after the last boot boundary. One is
+    the boot-time start. Two or more and somebody has restarted the daemon
+    since, which is a different claim - after `systemctl restart photontune`
+    the box has NOT rebooted, and "No tune since boot" is then false about a
+    box that had been up four hours and tuned three times in them. Observed
+    2026-11-16, immediately after installing a new tuner.
+
+    Counted rather than timed on purpose: this Pi has no RTC battery, so the
+    log's clock is the one thing here that cannot be trusted.
+    """
+    last_boot = -1
+    for i, (_t, m) in enumerate(rows):
+        if m.startswith("@@BOOT"):
+            last_boot = i
+    starts = [i for i, (_t, m) in enumerate(rows)
+              if i > last_boot and "Started photontune.service" in m]
+    return "photontune restarted" if len(starts) > 1 else "boot"
+
+
 def read(table, inst):
     """One snapshot of the table, as a dict of label -> value."""
     def get(key, kind):
@@ -438,13 +465,13 @@ GAIN_MARGINAL = 80.0    # at or above: running out of range
 #: from one of the two places a tune can happen. This is used only when the
 #: local log is ABSENT, and it is a claim about the record, which is all the
 #: record can support.
-NOT_RECORDED = ("No tune RECORDED since boot - and there is no local log here, "
+NOT_RECORDED = ("No tune RECORDED since %s - and there is no local log here, "
                 "so a tune somebody ran by hand would be INVISIBLE to this. "
                 "Do not read this as 'no tune happened'")
 #: ...but once the wrapper's log exists, hand runs ARE recorded, and the caveat
 #: above would be stale reassurance in the wrong direction - telling someone a
 #: tune might have happened invisibly when it could not have.
-NOT_RUN = "No tune since boot - run `photontune` to do one"
+NOT_RUN = "No tune since %s - run `photontune` to do one"
 
 #: Phrases photontune logs when the scene defeats it outright.
 TOO_DARK = ("cannot see the tags", "cannot work at", "scene is too")
@@ -844,10 +871,12 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
                "baseline applied%s %s" % (where, when))
         # local_seen means the wrapper's log was readable, so a hand-run tune
         # WOULD be in it. Only without that can this tool be blind to one.
-        return (what + ". " + (NOT_RUN if local_seen else NOT_RECORDED)) + danger, False
+        caveat = (NOT_RUN if local_seen else NOT_RECORDED) % _since(rows)
+        return (what + ". " + caveat) + danger, False
 
     return ("photontune started %s; nothing else recorded since. %s"
-            % (when, NOT_RUN if local_seen else NOT_RECORDED)) + danger, False
+            % (when, (NOT_RUN if local_seen else NOT_RECORDED) % _since(rows))
+            ) + danger, False
 
 
 def start_tune(table, inst, timeout=240.0, interval=2.0):
