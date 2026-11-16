@@ -36,7 +36,7 @@ On Windows? → [SETUP.md](SETUP.md), section 0c.
 | `calib/` | **Calibrate a camera.** Do this first — a camera with no calibration for the resolution it is running publishes *nothing*, which looks exactly like a dead camera. Also measures your vision standard deviations instead of guessing them. |
 | `survey/` | **Build a field layout from tags you can see.** For a practice field, or tags on a wall. Produces an `AprilTagFieldLayout` you upload to PhotonVision. |
 | `mount/` | **Find where the cameras are on the robot**, by spinning it, instead of with a tape measure. This is `robotToCamera`. |
-| `monitor/` | **Notice when a camera has moved.** Two cameras check each other; needs no field and no robot. |
+| `monitor/` | **Notice when a camera has moved.** Two cameras check each other; needs no field and no robot. Also `photontune_status.py`, which reads what photontune decided - that answer is published to NetworkTables, not logged. |
 | `setup/` | Get CSI/MIPI cameras recognised at all. USB cameras need none of this. Also `check_env.py`, which says whether a laptop can run each tool. |
 | `config/` | Change PhotonVision settings from a script instead of clicking. |
 | `viz/` | Watch the robot's position on a field, live. |
@@ -519,6 +519,7 @@ pip install -r requirements.txt -r requirements-survey.txt    # + survey, mount,
 | `monitor/camera_drift.py` | base (uses numpy) | websocket |
 | `survey/measure_quality.py` | base (uses numpy) | websocket |
 | `config/set_streams.py` | base + `pyntcore` | websocket + NT |
+| `monitor/photontune_status.py` | base + `pyntcore` | **NetworkTables** |
 | `survey/capture_corners.py` | **+ survey** | **NetworkTables** |
 | `mount/calibrate_mount.py` | **+ survey** | **NetworkTables** |
 | `survey/solve_layout.py` | **+ survey** | offline (reads a file) |

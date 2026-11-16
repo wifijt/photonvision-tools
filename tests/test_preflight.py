@@ -183,6 +183,87 @@ def test_file():
     check("a missing file is {}, not a crash", pf.read_config(), {})
 
 
+def test_require_nt_message():
+    """The NT failure message must FORMAT. It used to raise instead.
+
+    `seconds` was missing from its % tuple, so the %g received the address
+    string and the call died with "TypeError: must be real number, not str".
+    The one code path whose whole job is to explain an NT failure produced a
+    traceback instead - on the commonest failure in the repo, from inside
+    calibrate_mount, with a robot already in position. A message is not
+    verified by reading it; it is verified by forcing it.
+    """
+    print("\nrequire_nt - the failure message must format, not raise")
+    fresh()
+    pf.write_config({"FRC_TEAM": "5459"})
+    pf._config_cache = None
+
+    class NeverConnects(object):
+        def isConnected(self):
+            return False
+
+    try:
+        pf.require_nt(NeverConnects(), "10.54.59.2", seconds=0.01)
+        check("raises SystemExit", "returned normally", "SystemExit")
+        return
+    except SystemExit as e:
+        msg = str(e)
+    except TypeError as e:
+        check("formats without TypeError", "TypeError: %s" % e, "a message")
+        return
+    check("formats without raising",         isinstance(msg, str), True)
+    check("names the host",                  "10.54.59.2" in msg, True)
+    check("reports the wait it actually did", "0.01s" in msg, True)
+    check("explains startClient4 is silent", "startClient4" in msg, True)
+    check("says rio not Pi on a robot",      "roboRIO, not the Pi" in msg, True)
+    check("warns two servers fight",         "both go quiet" in msg, True)
+
+    class Connected(object):
+        def isConnected(self):
+            return True
+
+    try:
+        pf.require_nt(Connected(), "10.54.59.2", seconds=5)
+        check("returns at once when connected", True, True)
+    except SystemExit:
+        check("returns at once when connected", "exited", "returned")
+
+
+def test_require_nt_names_the_right_interface():
+    """On a dual-homed machine it must report the robot-facing address.
+
+    local_address() defaults to the route toward 8.8.8.8, which on a laptop
+    joined to school wifi AND cabled to the robot names the wifi interface -
+    the exact opposite of the question being asked. require_nt passes the host
+    instead whenever the host is numeric.
+    """
+    print("\nrequire_nt - which interface it names")
+    fresh()
+    calls = []
+    real = pf.local_address
+    pf.local_address = lambda toward="8.8.8.8": (calls.append(toward), "10.0.0.1")[1]
+
+    class NeverConnects(object):
+        def isConnected(self):
+            return False
+
+    try:
+        pf.require_nt(NeverConnects(), "10.54.59.2", seconds=0.01)
+    except SystemExit:
+        pass
+    pf.local_address = real
+    check("asks the route toward the HOST", calls, ["10.54.59.2"])
+
+    calls2 = []
+    pf.local_address = lambda toward="8.8.8.8": (calls2.append(toward), "10.0.0.1")[1]
+    try:
+        pf.require_nt(NeverConnects(), "photonvision.local", seconds=0.01)
+    except SystemExit:
+        pass
+    pf.local_address = real
+    check("falls back to 8.8.8.8 for a NAME", calls2, ["8.8.8.8"])
+
+
 def test_non_interactive():
     """A piped or scheduled run must not print half a question."""
     print("\ninteractive() - nobody to ask")
@@ -193,7 +274,9 @@ def test_non_interactive():
 
 if __name__ == "__main__":
     for fn in (test_team_base, test_roles, test_precedence, test_no_team,
-               test_validation, test_file, test_non_interactive):
+               test_validation, test_file, test_require_nt_message,
+               test_require_nt_names_the_right_interface,
+               test_non_interactive):
         fn()
     print("")
     if FAILED:

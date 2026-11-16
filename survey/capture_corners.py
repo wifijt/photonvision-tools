@@ -16,6 +16,9 @@ OPTIONS
     --host      the NetworkTables server: 'rio' on a robot, 'pi' when
                 PhotonVision is serving NT itself  (default pi)
     --camera    camera nickname (default: auto-detect)
+    --team      FRC team number, so --host can be 'rio' or '.12'. Defaults to
+                $FRC_TEAM, then ~/.photonvision-tools.conf. Asked for once and
+                remembered if neither is set.
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))

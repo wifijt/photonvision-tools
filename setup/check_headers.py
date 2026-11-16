@@ -50,11 +50,35 @@ def _text(node):
     return None
 
 
+#: Helpers that add arguments on a tool's behalf, so the flags they contribute
+#: never appear as an add_argument call in the tool's own AST. Without this the
+#: headers claim to list every option while silently omitting --team from all
+#: fourteen tools that take one - which is exactly the drift these blocks were
+#: generated to stop. Keep the text in step with preflight.add_team_argument.
+HELPER_ARGS = {
+    "add_team_argument": [
+        ("--team", None, None,
+         "FRC team number, so --host can be 'rio' or '.12'. Defaults to "
+         "$FRC_TEAM, then ~/.photonvision-tools.conf. Asked for once and "
+         "remembered if neither is set."),
+    ],
+}
+
+
 def options(path):
-    """[(name, metavar, default, help)] straight from the add_argument calls."""
+    """[(name, metavar, default, help)] straight from the add_argument calls.
+
+    Plus anything contributed by a HELPER_ARGS function the tool calls.
+    """
     tree = ast.parse(open(path).read())
     out = []
     for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "attr", "") in HELPER_ARGS):
+            for entry in HELPER_ARGS[getattr(node.func, "attr")]:
+                if entry not in out:
+                    out.append(entry)
+            continue
         if not (isinstance(node, ast.Call)
                 and getattr(node.func, "attr", "") == "add_argument"):
             continue

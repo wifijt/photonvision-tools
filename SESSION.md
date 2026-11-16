@@ -117,6 +117,7 @@ sudo systemctl restart photonvision
 > | `csi_cameras` | **localhost** | it edits `/boot` config, so it runs *on* the Pi |
 > | `calibrate_mount`, `photontune` | **`rio`** | they read NetworkTables |
 > | `capture_corners`, `camera_drift` | **`rio`** on a robot, `pi` on a bench | NT, wherever the server is |
+> | `photontune_status` | **`rio`** on a robot, `pi` on a bench | it reads photontune's published result off NT |
 > | `set_streams` | **`pi`**, plus `--nt-server rio` for `--daemon` | it writes settings over the websocket and listens on NT |
 > | `field_viewer` | **`rio`** plus `--pv-host pi` | poses come over NT, the FOV cones come from the calibration |
 >

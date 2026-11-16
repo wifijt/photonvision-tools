@@ -198,6 +198,12 @@ def require_nt(inst, host, seconds=10.0):
         if inst.isConnected():
             return
         time.sleep(0.2)
+    # `seconds` was missing from this tuple, so the %g got handed the address
+    # string and the whole message died with "TypeError: must be real number,
+    # not str". The one path whose entire job is to explain an NT failure
+    # raised a traceback instead, on what is the commonest failure there is.
+    # Formatted once and checked, rather than inlined into sys.exit().
+    mine = local_address(host if _looks_numeric(host) else "8.8.8.8")
     sys.exit(
         "NetworkTables never connected to %s (waited %gs).\n\n"
         "startClient4() does not fail on a bad address - it just never\n"
@@ -206,8 +212,8 @@ def require_nt(inst, host, seconds=10.0):
         "  - Off a robot, PhotonVision's own NT server must be ON\n"
         "    (config/set_nt_server.py true), and it must be OFF whenever a\n"
         "    roboRIO is present, or the two servers fight and both go quiet.\n"
-        "  - Check the laptop is on the robot network: %s"
-        % (host, local_address() or "could not determine this machine's address"))
+        "  - Check this machine is on the robot network: %s"
+        % (host, seconds, mine or "could not determine this machine's address"))
 
 
 

@@ -106,6 +106,10 @@ OPTIONS
                            to a TAG, so measure that tag's height once. The
                            official FRC field layout already uses true heights
                            - pass 0 there.
+    --team                 FRC team number, so --host can be 'rio' or '.12'.
+                           Defaults to $FRC_TEAM, then ~/.photonvision-
+                           tools.conf. Asked for once and remembered if neither
+                           is set.
 """
 import argparse
 import json
