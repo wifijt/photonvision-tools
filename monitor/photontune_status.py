@@ -114,6 +114,7 @@ import preflight
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -429,12 +430,14 @@ GAIN_MARGINAL = 80.0    # at or above: running out of range
 
 #: What this tool can and cannot conclude from a silent journal.
 #:
-#: journald captures the SERVICE's output. photontune writes no logfile, so a
-#: tune somebody ran by hand - `python3 /opt/photontune/photontune.py`, which
-#: is the obvious thing to do with a shell - prints to their terminal and is
-#: recorded NOWHERE this tool can see. "NO TUNE since last boot" was therefore
-#: a claim about the world made from one of the two places a tune can happen.
-#: It is now a claim about the record, which is all the record can support.
+#: journald captures the SERVICE's output. The tuner now writes its own log as
+#: well - but an older install does not, and on such a box a tune somebody ran
+#: by hand (`python3 /opt/photontune/photontune.py`, the obvious thing to do
+#: with a shell) prints to their terminal and is recorded NOWHERE this tool can
+#: see. "NO TUNE since last boot" was therefore a claim about the world made
+#: from one of the two places a tune can happen. This is used only when the
+#: local log is ABSENT, and it is a claim about the record, which is all the
+#: record can support.
 NOT_RECORDED = ("No tune RECORDED since boot - and there is no local log here, "
                 "so a tune somebody ran by hand would be INVISIBLE to this. "
                 "Do not read this as 'no tune happened'")
@@ -460,6 +463,22 @@ NOTHING_SEEN = ("and neither a shorter nor a longer exposure did",
 #: ...and when it cannot find what it was told to tune.
 NO_CAMERA = ("no cameras reported by photonvision", "no camera matched",
              "no cameras", "no camerasettings")
+
+#: The run failed on its REFERENCE, not on the scene.
+#:
+#: photontune takes its reference at MAX gain and treats it as "the best the
+#: scene can do". On a camera where high gain DEGRADES detection that is simply
+#: false, and when the reference fails its own test the tuner drops the
+#: tag-count floor, so nothing in the walk can be called a pass however well it
+#: reads. Observed 2026-11-16: a reference of 0.89 tags at ambiguity 0.937,
+#: against 1.00 tags at ambiguity 0.43 for every gain from 20 to 80. The run was
+#: then reported as "no gain saw the tags ... a LIGHTING or CONFIG problem",
+#: which is contradicted by its own six preceding lines. Sixty seconds later the
+#: same scene gave a reference of 1.00 and tuned, so it is not a setting - it is
+#: which side of the gate one noisy sample landed on. Never repeat that sentence
+#: without checking the tag counts first.
+REF_UNUSABLE = ("the reference measurement did not itself pass",
+                "does not pass its own test")
 
 
 def _age(stamp, now=None):
@@ -518,23 +537,8 @@ def uptime_seconds(ssh=None, key=None):
         return None                      # not Linux, so no claim either way
 
 
-def _cameras_applied(run):
-    """Camera names that got a gain/exposure APPLIED in this run, in order."""
-    names, current = [], None
-    for _t, m in run:
-        txt = m.strip()
-        if txt.startswith("\u2500\u2500 "):               # "── Left ──  current exposure..."
-            parts = txt.split("\u2500\u2500")
-            current = parts[1].strip() if len(parts) > 2 else None
-        elif current and "applied" in txt.lower() and "confirmed" in txt.lower():
-            if current not in names:
-                names.append(current)
-    return names
-
-
 def _applied_gain(run):
     """The highest gain applied in this run, which is the worst-lit camera."""
-    import re
     best = None
     for _t, m in run:
         hit = re.search(r"applied gain\s+(\d+(?:\.\d+)?)", m, re.I)
@@ -561,6 +565,169 @@ def _join(names):
     if len(names) == 1:
         return names[0]
     return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _split_run(run):
+    """(body, tail): the per-camera walk, and the closing summary block.
+
+    The summary names EVERY camera - "FAILED Left:" is printed while Right's
+    section is the last one still open - so folding it into whichever camera
+    happened to go last would hang one camera's failure on another.
+    """
+    cut = len(run)
+    for i, (_t, m) in enumerate(run):
+        if m.strip().lower().startswith("completed in"):
+            cut = i
+            break
+    return run[:cut], run[cut:]
+
+
+def _sections(rows):
+    """[(camera name or None, rows)], split on the "\u2500\u2500 Name \u2500\u2500" banners.
+
+    Rows before the first banner belong to the run, not to a camera, and come
+    back under None rather than being guessed at.
+    """
+    out, current, buf = [], None, []
+    for t, m in rows:
+        txt = m.strip()
+        if txt.startswith("\u2500\u2500 "):
+            if buf:
+                out.append((current, buf))
+            parts = txt.split("\u2500\u2500")
+            current = parts[1].strip() if len(parts) > 2 else None
+            buf = [(t, m)]
+        else:
+            buf.append((t, m))
+    if buf:
+        out.append((current, buf))
+    return out
+
+
+def _max_tags(rows):
+    """Most tags any trial in these rows actually saw. None if none reported.
+
+    This is the DATA, and it is the only thing entitled to settle whether a
+    camera saw a tag. The tuner's closing sentence is a conclusion drawn from
+    an acceptance test, and when that test is unsatisfiable the sentence says
+    "no gain saw the tags" about a walk that plainly did. Zero and None are
+    kept apart on purpose: 0.00 means every trial looked and found nothing,
+    None means nothing was measured, and only the first supports "NO TAGS".
+    """
+    best = None
+    for _t, m in rows:
+        for hit in re.finditer(r"\btags\s+(\d+(?:\.\d+)?)", m, re.I):
+            v = float(hit.group(1))
+            best = v if best is None else max(best, v)
+    return best
+
+
+def per_camera(run):
+    """What happened to EACH camera, in the order the run visited them.
+
+    A run does not have one outcome. Both of these were in the same run:
+
+        Left           unchanged (nothing worked at any gain or exposure)
+        Right          exposure -> 860, gain 20
+
+    and this tool reported "tune FAILED - NO TAGS SEEN at any gain or
+    exposure", which erased Right's success AND was false about Left, whose
+    walk saw 1.00 tags at four separate gains. Scanning a whole run's text for
+    a keyword can only ever return one answer for a run that has two, and the
+    answer it returns is whichever failure sorts first. So outcome is decided
+    per camera here, from that camera's own rows, and the one line is composed
+    afterwards from the result.
+
+    Returns a list of dicts in visit order, each with:
+        name, applied (bool), gain (float|None), failed (bool),
+        max_tags (float|None), why (short phrase|None)
+    """
+    body, tail = _split_run(run)
+    order, info = [], {}
+
+    def rec(name):
+        if name not in info:
+            order.append(name)
+            info[name] = {"name": name, "applied": False, "gain": None,
+                          "failed": False, "max_tags": None, "why": None,
+                          "text": ""}
+        return info[name]
+
+    for name, rows in _sections(body):
+        if not name:
+            continue
+        d = rec(name)
+        d["text"] = " ".join(m for _t, m in rows).lower()
+        d["max_tags"] = _max_tags(rows)
+        for _t, m in rows:
+            hit = re.search(r"applied gain\s+(\d+(?:\.\d+)?)", m, re.I)
+            if hit and "confirmed" in m.lower():
+                d["applied"] = True
+                d["gain"] = float(hit.group(1))
+
+    # The closing summary is definitive and it names every camera by hand.
+    for _t, m in tail:
+        txt = m.strip()
+        fail = re.match(r"(?i)^FAILED\s+(.+?):\s*(.*)$", txt)
+        if fail:
+            d = rec(fail.group(1).strip())
+            d["failed"] = True
+            if not d["text"]:
+                d["text"] = fail.group(2).lower()
+            continue
+        # "  Right          exposure -> 860, gain 20". Two or more spaces is
+        # the separator because a camera name can itself contain one, as
+        # "OV9281 (1)" does.
+        got = re.match(r"^(.+?)\s{2,}(unchanged\b|exposure\s*->)(.*)$", txt)
+        if got:
+            d = rec(got.group(1).strip())
+            if got.group(2).lower().startswith("exposure"):
+                d["applied"] = True
+                g = re.search(r"gain\s+(\d+(?:\.\d+)?)", got.group(3))
+                if g and d["gain"] is None:
+                    d["gain"] = float(g.group(1))
+
+    for d in info.values():
+        if d["failed"] and not d["why"]:
+            d["why"] = _why_failed(d)
+    return [info[n] for n in order]
+
+
+def _why_failed(d):
+    """The TRUE reason one camera failed, in a teenager's words.
+
+    Ordered by what the data can support, not by what the tuner said. The
+    tag counts come first because they are the one thing that cannot be
+    argued with: if a trial saw 1.00 tags, no sentence claiming nothing was
+    seen may be repeated, whatever else the log says.
+    """
+    t = d["text"]
+    seen = d["max_tags"]
+    if seen == 0:
+        return ("NO TAGS SEEN at any gain or exposure. Is a tag actually in "
+                "view?")
+    if any(k in t for k in REF_UNUSABLE):
+        if seen:
+            return ("saw tags (up to %.2f) but the max-gain reference was "
+                    "unusable, so nothing could pass - run it again, or aim "
+                    "that tag squarer to the camera" % seen)
+        return "the max-gain reference was unusable, so nothing could pass"
+    if any(k in t for k in TOO_DARK):
+        return "light levels TOO LOW for competition"
+    if any(k in t for k in NOTHING_SEEN):
+        return "nothing it tried worked"
+    return "no reason recorded"
+
+
+def _why_phrase(bad):
+    """One phrase for the failed cameras - shared if they agree, named if not."""
+    whys = [c["why"] or "no reason recorded" for c in bad]
+    if len(set(whys)) == 1:
+        if len(bad) > 1:
+            return "%s (%s)" % (whys[0], _join([c["name"] for c in bad]))
+        return whys[0]
+    return "; ".join("%s %s" % (c["name"], c["why"] or "no reason recorded")
+                     for c in bad)
 
 
 def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
@@ -593,20 +760,11 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
     if any(k in text for k in NO_CAMERA):
         # "no camera matched 'Left'. Available: Right" - naming the one that is
         # missing is the difference between a fixable problem and a mystery.
-        import re
         named = re.search(r"(?i)no camera matched ['\"]?([^'\".]+)", raw)
         if named:
             return ("ERROR %s camera NOT FOUND (%s)"
                     % (named.group(1).strip(), when)) + danger, False
         return ("ERROR cameras not found (%s)" % when) + danger, False
-
-    if any(k in text for k in NOTHING_SEEN):
-        return ("tune FAILED %s - NO TAGS SEEN at any gain or exposure. Is a "
-                "tag actually in view? If it is, the scene is too dark for any "
-                "setting" % when) + danger, False
-
-    if any(k in text for k in TOO_DARK):
-        return ("tune FAILED %s - light levels TOO LOW for competition" % when) + danger, False
 
     if "mismatch" in text:
         return ("tune ran %s but the camera did NOT take the settings - check it by hand"
@@ -616,14 +774,51 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
         return ("tune ABORTED %s and could not restore the exposure - check it by hand"
                 % when) + danger, False
 
-    applied = _cameras_applied(run)
-    if applied:
+    # ---- per camera, because a run can have two answers ------------------
+    #
+    # Everything above is a RUN-level abort - no cameras, or a write that did
+    # not land - where every camera shares the one answer. What follows does
+    # not. On 2026-11-16 this tool said
+    #
+    #     tune FAILED just now - NO TAGS SEEN at any gain or exposure
+    #
+    # about a run in which Right had just been tuned and applied at gain 20,
+    # and in which Left had seen 1.00 tags at four separate gains. A student
+    # reading that goes looking for lamps, having been told that the camera
+    # which is working is broken. Decide per camera; compose afterwards.
+    cams = per_camera(run)
+    done = [c for c in cams if c["applied"]]
+    bad = [c for c in cams if c["failed"] and not c["applied"]]
+
+    if done and bad:
+        light = _light_phrase(_applied_gain(run))
+        head = "tune ran %s - applied to %s" % (
+            when, _join([c["name"] for c in done]))
+        if light:
+            head += " (%s)" % light
+        return (head + "; %s FAILED - %s"
+                % (_join([c["name"] for c in bad]), _why_phrase(bad))) + danger, False
+
+    if bad:
+        return ("tune FAILED %s - %s" % (when, _why_phrase(bad))) + danger, False
+
+    if done:
         light = _light_phrase(_applied_gain(run))
         bits = ["tune ran %s" % when]
         if light:
             bits.append(light)
-        bits.append("applied to %s" % _join(applied))
+        bits.append("applied to %s" % _join([c["name"] for c in done]))
         return ", ".join(bits) + danger, not nt_local_on
+
+    # Nothing reached a per-camera verdict: an older log, or a run that died
+    # before it named a camera. The run-level text is then all there is.
+    if any(k in text for k in NOTHING_SEEN):
+        return ("tune FAILED %s - NO TAGS SEEN at any gain or exposure. Is a "
+                "tag actually in view? If it is, the scene is too dark for any "
+                "setting" % when) + danger, False
+
+    if any(k in text for k in TOO_DARK):
+        return ("tune FAILED %s - light levels TOO LOW for competition" % when) + danger, False
 
     if "not ready within" in text:
         return ("PhotonVision never came up %s - photontune gave up, nothing was set"
@@ -668,14 +863,13 @@ def start_tune(table, inst, timeout=240.0, interval=2.0):
     lock only stops two tunes colliding over the same cameras, which is what
     it is for.
 
-    This flag exists for ONE reason, and it is not convenience: a direct run
-    prints to a terminal and is recorded nowhere. journald captures the
-    SERVICE's output, and photontune writes no logfile - so a tune you run by
-    hand is invisible to this tool afterwards, and `photontune-status` will
-    still say "NO TUNE since last boot" because as far as the journal is
-    concerned there was not one. Going through the service puts the result in
-    the journal and in NT, where it can be read back later and by someone
-    else.
+    This flag exists for ONE reason, and it is not convenience. It used to be
+    that a direct run printed to a terminal and was recorded nowhere: journald
+    captures only the SERVICE's output, so a tune you ran by hand was invisible
+    to this tool afterwards and `photontune-status` would still say "NO TUNE
+    since last boot". The tuner now writes its own log, which closes that hole
+    for a current install. Going through the service additionally puts the
+    result in NT, where someone else can read it back while it runs.
 
     So: tuning at the bench, run photontune directly and watch it. Tuning
     something that needs to be ACCOUNTABLE afterwards - before a match, or for

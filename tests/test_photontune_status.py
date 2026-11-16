@@ -406,7 +406,11 @@ REAL_FAILED_RUN = [
     "shorter nor a longer exposure did. That is a LIGHTING or CONFIG problem.",
     "\u2500\u2500 Right \u2500\u2500  current exposure 3438.8577861772997, gain 40",
     "   baseline: already correct",
+    "   reference  gain 100  exposure    860  tags 0.00  ambiguity n/a  (no multitag)",
+    "       gain 100  exposure   1719  tags 0.00  ambiguity n/a  (no multitag)",
     "   even gain 100 cannot see the tags at 860 us - the scene is too dark for the blur budget.",
+    "   !! no gain from [0, 20, 40, 60, 80, 100] saw the tags at 860 us, and neither a "
+    "shorter nor a longer exposure did. That is a LIGHTING or CONFIG problem.",
     "completed in 114 s",
     "  Left           unchanged (nothing worked at any gain or exposure)",
     "  Right          unchanged (nothing worked at any gain or exposure)",
@@ -501,6 +505,123 @@ def test_dim_tags_are_not_the_same_as_no_tags():
           "too dark for any setting" in v, True)
 
 
+#: The run that proved one verdict cannot describe two cameras. Verbatim from
+#: /var/log/photontune/photontune.log, 2026-11-16 18:02:26, trimmed only in the
+#: middle of Left's gain walk - every line that decides anything is here.
+MIXED_RUN = [
+    "photontune run started: ",
+    "tuning 2 camera(s): Left, Right",
+    "\u2500\u2500 Left \u2500\u2500  current exposure 3453.9974841568746, gain 60",
+    "   baseline: already correct",
+    "   reference  gain 100  exposure    863  tags 0.89  ambiguity 0.937  (no multitag)",
+    "   !! the reference does not pass its own test (no multi-tag solve, and only 0.89 "
+    "tags), so it cannot be a bar. Walking without the tag-count floor; THIS RUN WILL "
+    "NOT REPORT SUCCESS.",
+    "       gain 20   exposure    863  tags 1.00  ambiguity 0.800  (no multitag)",
+    "       gain 40   exposure    863  tags 1.00  ambiguity 0.429  (no multitag)",
+    "       gain 60   exposure    863  tags 1.00  ambiguity 0.429  (no multitag)",
+    "       gain 80   exposure    863  tags 1.00  ambiguity 0.460  (no multitag)",
+    "       gain 100  exposure    863  tags 0.89  ambiguity 0.937  (no multitag)",
+    "   even gain 100 cannot see the tags at 863 us - the scene is too dark for the blur budget.",
+    "   !! no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us, and neither a "
+    "shorter nor a longer exposure did. That is a LIGHTING or CONFIG problem, not a "
+    "tuning one: check cameraBrightness, check the camera is pointed at tags, add light.",
+    "\u2500\u2500 Right \u2500\u2500  current exposure 3438.8577861772997, gain 40",
+    "   baseline: already correct",
+    "   reference  gain 100  exposure    860  tags 1.00  ambiguity 0.000  (no multitag)",
+    "   only one tag is visible to this camera (1.00 tags at ambiguity 0.000, 35 frames).",
+    "   ok  gain 0    exposure    860  tags 1.00  ambiguity 0.000  (no multitag)",
+    "   lowest gain that sees every tag: 0. Applying 20 - one grid step of margin.",
+    "   applied gain 20 / exposure 860 - confirmed. 6 px of smear at 360 deg/s (budget 6)",
+    "   ok  applied   gain 20   exposure    860  tags 1.00  ambiguity 0.000  (no multitag)",
+    "completed in 78 s",
+    "  Left           unchanged (nothing worked at any gain or exposure)",
+    "  Right          exposure -> 860, gain 20",
+    "FAILED Left: no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us, and "
+    "neither a shorter nor a longer exposure did. That is a LIGHTING or CONFIG problem; "
+    "the reference measurement did not itself pass (no multi-tag solve, and only 0.89 "
+    "tags), so it is not a bar anything can be held to.",
+    "photontune run finished",
+]
+
+
+def test_one_camera_tuned_the_other_did_not():
+    """Two cameras, two outcomes, one line that has to carry both.
+
+    Reported at the bench as:
+
+        tune FAILED just now - NO TAGS SEEN at any gain or exposure
+
+    Right had just been tuned and applied at gain 20. Left had seen 1.00 tags
+    at four separate gains. Both halves of that sentence were false, and the
+    half that was readable as advice - go and find some light - pointed at the
+    one thing that was not the problem.
+
+    Two independent causes, so two sets of checks. The whole-run text scan
+    could only return one answer, and NOTHING_SEEN sorted ahead of "applied",
+    so one camera's failure erased the other's success. And the failure itself
+    was misattributed: what failed on Left was the REFERENCE, taken at max
+    gain, where that camera happens to read WORSE (0.89 tags, ambiguity 0.937)
+    than at every gain from 20 to 80 (1.00 tags, ambiguity 0.43).
+    """
+    print("\nverdict - one camera tuned, one failed")
+    rows = pts.parse_local("".join("%s %s\n" % (STAMP, m) for m in MIXED_RUN))
+    cams = {c["name"]: c for c in pts.per_camera(rows)}
+
+    check("both cameras are accounted for", sorted(cams), ["Left", "Right"])
+    check("Right is recorded as applied", cams["Right"]["applied"], True)
+    check("Right's gain is read back", cams["Right"]["gain"], 20.0)
+    check("Left is recorded as failed", cams["Left"]["failed"], True)
+    check("Left is NOT recorded as applied", cams["Left"]["applied"], False)
+    check("Left's best tag count is kept", cams["Left"]["max_tags"], 1.0)
+
+    line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
+    check("names the camera that WORKED", "applied to Right" in line, True)
+    check("names the camera that FAILED", "Left FAILED" in line, True)
+    check("does NOT claim nothing was seen",
+          "NO TAGS SEEN" in line, False)
+    check("does NOT blame the light",
+          "light levels TOO LOW" in line, False)
+    check("blames the reference, which is what failed",
+          "reference was unusable" in line, True)
+    check("says what to do about it", "aim that tag squarer" in line, True)
+    check("NOT reported as ready", ready, False)
+
+
+def test_a_failure_cannot_erase_a_success():
+    """The ordering bug on its own, independent of any one message.
+
+    Whatever a failed camera's reason turns out to be, a camera that was
+    tuned and confirmed must still be named. This fails if anybody ever moves
+    a failure check back above the per-camera branch.
+    """
+    print("\nverdict - a failure never erases a success")
+    for reason in ("no gain from [0, 20] saw the tags at 863 us, and neither a "
+                   "shorter nor a longer exposure did.",
+                   "even gain 100 cannot see the tags at 863 us - the scene is "
+                   "too dark for the blur budget.",
+                   "the reference measurement did not itself pass."):
+        rows = pts.parse_local("".join("%s %s\n" % (STAMP, m) for m in [
+            "photontune run started: ",
+            "\u2500\u2500 Left \u2500\u2500  current exposure 3453.9, gain 60",
+            "   reference  gain 100  exposure 863  tags 0.50  ambiguity 0.9",
+            "   !! " + reason,
+            "\u2500\u2500 Right \u2500\u2500  current exposure 3438.8, gain 40",
+            "   applied gain 20 / exposure 860 - confirmed. 6 px of smear",
+            "completed in 78 s",
+            "  Left           unchanged (nothing worked at any gain or exposure)",
+            "  Right          exposure -> 860, gain 20",
+            "FAILED Left: " + reason,
+            "photontune run finished",
+        ]))
+        line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
+        check("Right still named (%s...)" % reason[:22],
+              "applied to Right" in line, True)
+        check("Left still named (%s...)" % reason[:22],
+              "Left FAILED" in line, True)
+        check("not ready (%s...)" % reason[:22], ready, False)
+
+
 if __name__ == "__main__":
     for fn in (test_parse, test_last_run_anchors_on_the_boundary, test_decisive,
                test_no_boundary_means_one_run, test_journal_without_journalctl,
@@ -511,7 +632,9 @@ if __name__ == "__main__":
                test_caveat_depends_on_the_local_log,
                test_the_run_that_caught_the_lie,
                test_a_missing_log_never_claims_no_tune,
-               test_dim_tags_are_not_the_same_as_no_tags):
+               test_dim_tags_are_not_the_same_as_no_tags,
+               test_one_camera_tuned_the_other_did_not,
+               test_a_failure_cannot_erase_a_success):
         fn()
     print("")
     if FAILED:
