@@ -17,16 +17,34 @@
 #     sh setup/install_photontune_status.sh photon@10.54.59.12
 #     sh setup/install_photontune_status.sh photon@photonvision.local
 #
+# A second argument is an ssh key, for when the target is not already set up in
+# ~/.ssh/config and no agent is loaded - which is the common case on a laptop
+# that reaches the Pi by address:
+#
+#     sh setup/install_photontune_status.sh photon@10.54.59.12 ~/.ssh/photonvision
+#
 # It needs passwordless sudo on the target (the PhotonVision image has it).
 # Re-running it is how you upgrade; it overwrites the three files and nothing
 # else, touches no service, and restarts nothing.
 set -e
 
 TARGET="$1"
+KEY="$2"
 if [ -z "$TARGET" ]; then
-    echo "usage: sh setup/install_photontune_status.sh user@host" >&2
+    echo "usage: sh setup/install_photontune_status.sh user@host [ssh-key]" >&2
     echo "   eg: sh setup/install_photontune_status.sh photon@10.54.59.12" >&2
+    echo "       sh setup/install_photontune_status.sh photon@10.54.59.12 ~/.ssh/photonvision" >&2
     exit 2
+fi
+if [ -n "$KEY" ] && [ ! -f "$KEY" ]; then
+    echo "no such key: $KEY" >&2
+    exit 2
+fi
+
+# Built once and reused, so scp and ssh cannot disagree about how to connect.
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=10"
+if [ -n "$KEY" ]; then
+    SSH_OPTS="$SSH_OPTS -i $KEY"
 fi
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -62,15 +80,20 @@ exec /usr/bin/python3 /opt/photontune/photontune_status.py --host 127.0.0.1 "$@"
 WRAPPER
 
 echo "copying to $TARGET:/tmp ..."
-scp -q "$HERE/preflight.py" "$HERE/monitor/photontune_status.py" "$WRAP" \
-    "$TARGET:/tmp/" || {
-        echo "scp failed - is the host reachable, and the key loaded?" >&2
+# shellcheck disable=SC2086  # SSH_OPTS must word-split
+scp -q $SSH_OPTS "$HERE/preflight.py" "$HERE/monitor/photontune_status.py" \
+    "$WRAP" "$TARGET:/tmp/" || {
+        echo "" >&2
+        echo "scp to $TARGET failed. Usually one of:" >&2
+        echo "  - the host is unreachable          ping it" >&2
+        echo "  - no key for it                    pass one as the 2nd argument" >&2
+        echo "  - ~/.ssh/config names a stale address for that name" >&2
         exit 1
     }
 WRAPNAME=$(basename "$WRAP")
 
 echo "installing ..."
-ssh "$TARGET" "set -e
+ssh $SSH_OPTS "$TARGET" "set -e
     sudo mkdir -p /opt/photontune
     sudo cp /tmp/preflight.py /opt/photontune/preflight.py
     sudo cp /tmp/photontune_status.py /opt/photontune/photontune_status.py
@@ -80,7 +103,7 @@ ssh "$TARGET" "set -e
     rm -f /tmp/$WRAPNAME"
 
 echo "checking it runs ..."
-ssh "$TARGET" 'photontune-status --help >/dev/null' || {
+ssh $SSH_OPTS "$TARGET" 'photontune-status --help >/dev/null' || {
     echo "installed, but it will not start. Does the target have ntcore?" >&2
     echo "  python3 -c 'import ntcore'" >&2
     exit 1

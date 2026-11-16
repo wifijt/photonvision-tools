@@ -380,18 +380,33 @@ That puts `preflight.py` and `photontune_status.py` in `/opt/photontune` and a
 restarts nothing; re-running it is how you upgrade. Then, on the Pi:
 
 ```sh
-photontune-status              # the last tune, and the boot baseline
-photontune-status --watch      # follow a tune while it runs
+photontune-status              # the journal, plus NT if a server is up
+photontune-status --all        # every journal line, with boot boundaries
+photontune-status --boots -1   # the previous boot only
+photontune-status --watch      # follow a tune live (needs NT)
 photontune-status --host rio   # on a robot
 ```
 
-**Why this is not a `journalctl` command.** photontune writes no results file,
-and the journal carries only the boot baseline — a line per camera saying the
-exposure it asserted. The *sweep's* answer is published to the `/PhotonTune`
-NetworkTables table as `summary`, `ok`, `warnings` and `result` (full JSON), and
-if nothing reads that table the answer is gone when the daemon restarts. So
-`journalctl -u photontune` hands you the baseline's answer, which looks like a
-plausible answer to "what did the tune choose?" and is a different question.
+From a laptop, with no journal of its own, read the Pi's over ssh:
+
+```sh
+python3 monitor/photontune_status.py \
+    --ssh photon@10.54.59.12 --ssh-key ~/.ssh/photonvision
+```
+
+**Two sources, and the journal is the record.** This matters because it is easy
+to get backwards:
+
+| | holds | survives a restart |
+|---|---|---|
+| **journal** | the gain walk trial by trial, the gain chosen and the margin added, the applied-and-confirmed line, every refusal, and which boot each happened in | **yes**, across boots |
+| **NetworkTables** `/PhotonTune` | `summary`, `ok`, `warnings`, `result` (full JSON), live `progress` | no — the keys are gone when the daemon restarts |
+
+So the journal is authoritative for what *happened* and NT for what is
+happening *now*. The tool reads the journal always and NT when it can; a
+missing NT server is one line of output, not a failure. On a bench with no
+roboRIO there may be no NT server at all, in which case NT holds nothing and
+never did — and the journal is the only answer you are going to get.
 
 **It needs an NT server to exist**, because photontune is only ever a client —
 deliberately, since PhotonVision's server-management API restarts the web server
