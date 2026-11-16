@@ -61,12 +61,24 @@ OPTIONS
                        from a laptop. Needs passwordless sudo there
     --ssh-key FILE     identity for --ssh, when the host is not in
                        ~/.ssh/config and no agent is loaded
-    --all              print every journal line, not just the decisions and the
-                       most recent tune
+    -v, --verbose      the full report: every decision, the most recent run in
+                       full, and the NetworkTables table. Without this you get
+                       one line
+    --all              implies -v, and prints EVERY journal line with the boot
+                       boundaries
+    --pv-host          the box running PhotonVision, checked for a stray NT
+                       server. Not the same question as --host: on a robot
+                       --host is the roboRIO and serving NT is correct, while
+                       PhotonVision serving it at the same time is the silent
+                       failure being looked for  (default 127.0.0.1)
     --boots N          restrict the journal to boot N, journalctl's numbering:
                        0 is this boot, -1 the one before
     --lines            most journal lines to read  (default 4000)
     --table            NT table photontune publishes to  (default PhotonTune)
+    --tune             START A TUNE and follow it to the end. This WRITES: it
+                       sets /PhotonTune/run true, the only thing that starts
+                       one. photontune refuses while the robot is enabled.
+                       Needs NetworkTables
     --watch            follow a tune live. This one DOES need NetworkTables,
                        because progress is only published there
     --interval         seconds between --watch samples  (default 2.0)
@@ -312,6 +324,263 @@ def show(s, full_json=True):
         print("    " + line)
 
 
+
+# ---------------------------------------------------------------------------
+# The one line that actually gets read.
+#
+# A teenager in a pit is not going to read 70 lines of journal. They need one
+# sentence that says whether vision is ready, and the one safety item that
+# will silently kill a match. Everything below builds that sentence from the
+# journal, and every phrase it can produce is grounded in a real log string
+# from photontune - nothing here is inferred from a metric that does not exist.
+# ---------------------------------------------------------------------------
+
+#: Applied gain is the light measure. The walk visits six points from 0 to
+#: --max-gain (default 100), so the steps are 20. Low gain means the scene had
+#: light to spare; the top of the range means it barely worked.
+GAIN_GOOD = 20.0        # at or below: plenty of light
+GAIN_MARGINAL = 80.0    # at or above: running out of range
+
+#: Phrases photontune logs when the scene defeats it outright.
+TOO_DARK = ("cannot see the tags", "cannot work at", "scene is too")
+#: ...and when it cannot find what it was told to tune.
+NO_CAMERA = ("no cameras reported by photonvision", "no camera matched",
+             "no cameras", "no camerasettings")
+
+
+def _age(stamp, now=None):
+    """(seconds, text) for a short-iso stamp. (None, reason) if it cannot."""
+    import datetime
+    if not stamp:
+        return None, "time unknown"
+    try:
+        # "2026-11-16T14:23:01+0000" - %z wants no colon, which short-iso gives
+        when = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return None, "time unreadable"
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    secs = (now - when).total_seconds()
+    if secs < -60:
+        # The Pi has no RTC battery and no NTP on an isolated network, so a
+        # stamp in the future means the clock is wrong, not that time moved.
+        return secs, "clock is wrong (log is ahead of now)"
+    if secs < 90:
+        return secs, "just now"
+    if secs < 5400:
+        return secs, "%d min ago" % round(secs / 60.0)
+    if secs < 172800:
+        return secs, "%d h ago" % round(secs / 3600.0)
+    return secs, "%d days ago" % round(secs / 86400.0)
+
+
+def uptime_seconds(ssh=None, key=None):
+    """How long this box has been up, or None.
+
+    Used to catch a lying clock. The Pi has no RTC battery and an isolated
+    robot network has no NTP, so entries written before someone fixes the date
+    carry a timestamp that is days out - and "applied 18 days ago" about a
+    baseline that ran forty minutes ago reads as stale vision when it is not.
+    An entry from the CURRENT boot cannot be older than the uptime, which
+    settles it without guessing.
+    """
+    if ssh:
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        if key:
+            cmd += ["-i", key]
+        cmd += [ssh, "cat /proc/uptime"]
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+            out, _err = proc.communicate(timeout=20)
+            if proc.returncode != 0:
+                return None
+            return float(out.split()[0])
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            return None
+    try:
+        with open("/proc/uptime") as fh:
+            return float(fh.read().split()[0])
+    except (IOError, OSError, ValueError, IndexError):
+        return None                      # not Linux, so no claim either way
+
+
+def _cameras_applied(run):
+    """Camera names that got a gain/exposure APPLIED in this run, in order."""
+    names, current = [], None
+    for _t, m in run:
+        txt = m.strip()
+        if txt.startswith("\u2500\u2500 "):               # "── Left ──  current exposure..."
+            parts = txt.split("\u2500\u2500")
+            current = parts[1].strip() if len(parts) > 2 else None
+        elif current and "applied" in txt.lower() and "confirmed" in txt.lower():
+            if current not in names:
+                names.append(current)
+    return names
+
+
+def _applied_gain(run):
+    """The highest gain applied in this run, which is the worst-lit camera."""
+    import re
+    best = None
+    for _t, m in run:
+        hit = re.search(r"applied gain\s+(\d+(?:\.\d+)?)", m, re.I)
+        if hit:
+            g = float(hit.group(1))
+            best = g if best is None else max(best, g)
+    return best
+
+
+def _light_phrase(gain):
+    if gain is None:
+        return None
+    if gain <= GAIN_GOOD:
+        return "light levels optimal"
+    if gain >= GAIN_MARGINAL:
+        return "light levels MARGINAL (gain %g of %g - almost out of range)" % (
+            gain, GAIN_MARGINAL + 20)
+    return "light levels workable (gain %g)" % gain
+
+
+def _join(names):
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def verdict(rows, note="", nt_local_on=False, now=None, uptime=None):
+    """One line. What a teenager reads, and nothing else.
+
+    Returns (text, ready) - ready is False whenever someone should look before
+    trusting vision, so a caller can colour or exit on it.
+    """
+    danger = "  *** DANGER: local NT server is ON - turn it OFF before the robot ***" \
+             if nt_local_on else ""
+
+    if note:
+        return ("cannot tell - no photontune log here (%s)" % note) + danger, False
+    if not rows:
+        return "photontune has NEVER run on this box" + danger, False
+
+    run, _decisive = last_run(rows)
+    raw = " ".join(m for _t, m in run)      # case preserved: camera names
+    text = raw.lower()                      # case folded: keyword matching
+    stamp = next((t for t, m in reversed(run) if t), "")
+    secs, when = _age(stamp, now)
+    # last_run anchors on the current boot's start, so anything in it happened
+    # during this uptime. A bigger age than that is the clock, not the event.
+    if (uptime is not None and secs is not None
+            and secs > uptime + 300):
+        when = "earlier this boot (the log's clock was wrong)"
+
+    # Order matters: the worst thing true is the thing to say.
+    if any(k in text for k in NO_CAMERA):
+        # "no camera matched 'Left'. Available: Right" - naming the one that is
+        # missing is the difference between a fixable problem and a mystery.
+        import re
+        named = re.search(r"(?i)no camera matched ['\"]?([^'\".]+)", raw)
+        if named:
+            return ("ERROR %s camera NOT FOUND (%s)"
+                    % (named.group(1).strip(), when)) + danger, False
+        return ("ERROR cameras not found (%s)" % when) + danger, False
+
+    if any(k in text for k in TOO_DARK):
+        return ("tune FAILED %s - light levels TOO LOW for competition" % when) + danger, False
+
+    if "mismatch" in text:
+        return ("tune ran %s but the camera did NOT take the settings - check it by hand"
+                % when) + danger, False
+
+    if "could not restore" in text:
+        return ("tune ABORTED %s and could not restore the exposure - check it by hand"
+                % when) + danger, False
+
+    applied = _cameras_applied(run)
+    if applied:
+        light = _light_phrase(_applied_gain(run))
+        bits = ["tune ran %s" % when]
+        if light:
+            bits.append(light)
+        bits.append("applied to %s" % _join(applied))
+        return ", ".join(bits) + danger, not nt_local_on
+
+    if "not ready within" in text:
+        return ("PhotonVision never came up %s - photontune gave up, nothing was set"
+                % when) + danger, False
+
+    if "baseline" in text:
+        ok = "ok=true" in text
+        cams = []
+        for _t, m in run:
+            if m.strip().lower().startswith("baseline for"):
+                cams = [c.strip() for c in m.split(":", 1)[-1].split(",") if c.strip()]
+        where = " on %s" % _join(cams) if cams else ""
+        if ok:
+            return ("baseline only%s, applied %s. NO TUNE since last boot - "
+                    "run `photontune-status --tune` to tune" % (where, when)) + danger, False
+        return ("baseline FAILED %s%s" % (when, where)) + danger, False
+
+    return ("photontune started %s but has done nothing since" % when) + danger, False
+
+
+def start_tune(table, inst, timeout=240.0, interval=2.0):
+    """Set /PhotonTune/run true and follow it to the end.
+
+    This is the ONLY way a tune starts. /PhotonTune/run is a NetworkTables
+    boolean, NOT a shell command, and until this flag existed the only things
+    that could write it were the Elastic dashboard, robot code, or a
+    hand-rolled script - a strange answer to "how do I tune the cameras".
+
+    photontune clears the flag itself when it finishes, and refuses outright
+    while the robot is enabled. That interlock is its own and is not worked
+    around from here.
+    """
+    import ntcore
+    pub = table.getBooleanTopic("run").publish()
+    pub.set(True, int(ntcore._now()))
+    print("asked photontune to tune (/PhotonTune/run = true)")
+    print("it refuses while the robot is enabled; disable it if nothing happens.\n")
+
+    started = time.time()
+    seen_busy = False
+    last = ""
+    while time.time() - started < timeout:
+        snap = read(table, inst)
+        if snap["busy"]:
+            seen_busy = True
+        line = "%-6s %3.0f%%  %s" % ("busy" if snap["busy"] else "idle",
+                                     snap["progress"] * 100,
+                                     (snap["status"] or "")[:70])
+        if line != last:
+            print("   " + line)
+            last = line
+        if seen_busy and not snap["busy"]:
+            break
+        time.sleep(interval)
+    else:
+        print("   gave up waiting after %.0f s - the tune may still be running"
+              % timeout)
+        return False
+
+    snap = read(table, inst)
+    print("")
+    show(snap, full_json=False)
+    return bool(snap["ok"])
+
+
+def nt_server_here(host, port=5810, timeout=2.0):
+    """Is something serving NetworkTables on `host`? A stray one loses matches.
+
+    PhotonVision's own NT server must be OFF whenever a roboRIO is present, or
+    the two fight and both go quiet - with no error anywhere. That failure is
+    silent, costs a match, and is one TCP connect to detect, so it is checked
+    on every run and shouted about rather than mentioned.
+    """
+    ok, _detail = preflight.reachable(host, port, timeout)
+    return ok
+
+
 def show_journal(rows, note, show_all=False, advice=()):
     """The journal half of the report. This is the part that survives a reboot."""
     print("JOURNAL  (what happened - persists across boots)")
@@ -400,9 +669,19 @@ def main():
     p.add_argument("--ssh-key", default=None, metavar="FILE",
                    help="identity for --ssh, when the host is not in "
                         "~/.ssh/config and no agent is loaded")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="the full report: every decision, the most recent run "
+                        "in full, and the NetworkTables table. Without this "
+                        "you get one line")
     p.add_argument("--all", action="store_true",
-                   help="print every journal line, not just the decisions and "
-                        "the most recent tune")
+                   help="implies -v, and prints EVERY journal line with the "
+                        "boot boundaries")
+    p.add_argument("--pv-host", default="127.0.0.1",
+                   help="the box running PhotonVision, checked for a stray NT "
+                        "server. Not the same question as --host: on a robot "
+                        "--host is the roboRIO and serving NT is correct, "
+                        "while PhotonVision serving it at the same time is the "
+                        "silent failure being looked for")
     p.add_argument("--boots", type=int, default=None, metavar="N",
                    help="restrict the journal to boot N, journalctl's "
                         "numbering: 0 is this boot, -1 the one before")
@@ -410,6 +689,11 @@ def main():
                    help="most journal lines to read")
     p.add_argument("--table", default="PhotonTune",
                    help="NT table photontune publishes to")
+    p.add_argument("--tune", action="store_true",
+                   help="START A TUNE and follow it to the end. This WRITES: "
+                        "it sets /PhotonTune/run true, the only thing that "
+                        "starts one. photontune refuses while the robot is "
+                        "enabled. Needs NetworkTables")
     p.add_argument("--watch", action="store_true",
                    help="follow a tune live. This one DOES need NetworkTables, "
                         "because progress is only published there")
@@ -428,8 +712,8 @@ def main():
     a = p.parse_args()
     a.host = preflight.resolve_host(a.host, a.team)
 
-    if a.watch:
-        # Only here is NT mandatory, so only here does a missing one exit.
+    if a.watch or a.tune:
+        # These two need NT, so these two are the only ones that exit without it.
         ntcore = _need_nt()
         inst = ntcore.NetworkTableInstance.getDefault()
         inst.startClient4("photontune-status")
@@ -437,6 +721,8 @@ def main():
         preflight.require_nt(inst, a.host)
         time.sleep(a.settle)
         table = inst.getTable(a.table)
+        if a.tune:
+            sys.exit(0 if start_tune(table, inst) else 1)
         try:
             while True:
                 snap = read(table, inst)
@@ -451,12 +737,30 @@ def main():
             print("")
         return
 
-    where = a.ssh or "this machine"
-    print("photontune: journal from %s, NetworkTables at %s\n" % (where, a.host))
+    # --ssh means the Pi is elsewhere, so that is the box to check for a stray
+    # NT server, not this laptop.
+    pv_host = a.pv_host
+    if a.ssh and pv_host == "127.0.0.1":
+        pv_host = a.ssh.split("@")[-1]
+    nt_local_on = nt_server_here(pv_host)
 
+    rows, note = ([], "skipped (--no-journal)")
     if not a.no_journal:
         rows, note = journal(lines=a.lines, ssh=a.ssh, boots=a.boots,
                              key=a.ssh_key)
+    up = uptime_seconds(ssh=a.ssh, key=a.ssh_key)
+
+    if not (a.verbose or a.all):
+        line, ready = verdict(rows, note, nt_local_on, uptime=up)
+        print("Photon tune status: %s" % line)
+        sys.exit(0 if ready else 1)
+
+    where = a.ssh or "this machine"
+    print("Photon tune status: %s\n"
+          % verdict(rows, note, nt_local_on, uptime=up)[0])
+    print("journal from %s, NetworkTables at %s\n" % (where, a.host))
+
+    if not a.no_journal:
         # Advice has to match what was actually tried. Telling someone to use
         # --ssh when --ssh is the thing that just failed is worse than silence.
         if a.ssh and "denied" in note.lower():

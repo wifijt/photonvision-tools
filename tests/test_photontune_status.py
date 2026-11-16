@@ -130,9 +130,173 @@ def test_journal_without_journalctl():
     check("does not blame a password", "password" in note.lower(), False)
 
 
+# --- the one line a teenager reads -----------------------------------------
+# Most of these cannot be produced on real hardware on demand - nobody is
+# going to unplug a camera to see the camera-missing line - so they are driven
+# from synthetic journals built out of photontune's real log strings.
+
+import datetime
+
+NOW = datetime.datetime(2026, 11, 16, 15, 0, 0, tzinfo=datetime.timezone.utc)
+STAMP = "2026-11-16T14:47:00+0000"       # 13 minutes before NOW
+
+
+def mkjournal(*messages):
+    head = "%s h p[1]: Started photontune.service - PhotonTune\n" % STAMP
+    return pts.parse_journal(head + "".join(
+        "%s h p[1]: %s\n" % (STAMP, m) for m in messages))
+
+
+CAM_L = "\u2500\u2500 Left \u2500\u2500  current exposure 3453, gain 60"
+CAM_R = "\u2500\u2500 Right \u2500\u2500  current exposure 3438, gain 40"
+
+
+def test_verdict_cases():
+    print("\nverdict - the one line, per situation")
+
+    def line(rows, note="", nt=False):
+        return pts.verdict(rows, note, nt_local_on=nt, now=NOW)[0]
+
+    def ready(rows, note="", nt=False):
+        return pts.verdict(rows, note, nt_local_on=nt, now=NOW)[1]
+
+    v = line([], "no systemd journal on this machine (darwin)")
+    check("no log: says it cannot tell", "cannot tell" in v, True)
+    check("no log: not reported as ready",
+          ready([], "no systemd journal"), False)
+
+    v = line([])
+    check("never ran", "NEVER run" in v, True)
+
+    v = line(mkjournal("baseline for 2 camera(s): Left, Right", CAM_L,
+                       "   baseline: already correct",
+                       "boot baseline done in 1 s: ok=True Left: already correct"))
+    check("baseline only: says baseline only", "baseline only" in v, True)
+    check("baseline only: names both cameras",
+          "Left and Right" in v, True)
+    check("baseline only: says NO TUNE", "NO TUNE" in v, True)
+    check("baseline only: does NOT look like a shell command",
+          "/PhotonTune/run true" in v, False)
+    check("baseline only: points at the real command",
+          "--tune" in v, True)
+    check("baseline only: not ready", ready(mkjournal(
+        "baseline for 2 camera(s): Left, Right", CAM_L,
+        "boot baseline done in 1 s: ok=True")), False)
+
+    v = line(mkjournal("boot baseline skipped: PhotonVision not ready within 90s"))
+    check("PV never came up: says so", "never came up" in v, True)
+    check("PV never came up: says nothing was set", "nothing was set" in v, True)
+
+    v = line(mkjournal("no cameras reported by PhotonVision at 127.0.0.1"))
+    check("no cameras: ERROR", v.startswith("ERROR"), True)
+    check("no cameras: says not found", "not found" in v, True)
+
+    v = line(mkjournal("no camera matched 'Left'. Available: Right"))
+    check("named camera: names it", "Left camera NOT FOUND" in v, True)
+    check("named camera: keeps its capital L", "left camera" in v, False)
+
+    v = line(mkjournal(CAM_L,
+                       "   even gain 100 cannot see the tags at 3453 us - the scene is too dark"))
+    check("too dark: FAILED", "FAILED" in v, True)
+    check("too dark: the phrase he asked for",
+          "light levels TOO LOW for competition" in v, True)
+
+    v = line(mkjournal(CAM_L,
+                       "   *** MISMATCH *** wanted gain 40 / exposure 3000, camera reports 60"))
+    check("mismatch: says the camera refused",
+          "did NOT take the settings" in v, True)
+
+    good = mkjournal(
+        CAM_L, "   lowest gain that sees every tag: 0. Applying 20 - one step",
+        "   applied gain 20 / exposure 3453 - confirmed. 5.8 px of smear",
+        CAM_R, "   applied gain 20 / exposure 3438 - confirmed. 5.6 px of smear")
+    v = line(good)
+    check("good tune: says when", "13 min ago" in v, True)
+    check("good tune: light optimal", "light levels optimal" in v, True)
+    check("good tune: names both cameras", "Left and Right" in v, True)
+    check("good tune: IS ready", ready(good), True)
+
+    v = line(mkjournal(CAM_L,
+                       "   applied gain 100 / exposure 3453 - confirmed. 5.8 px of smear"))
+    check("max gain: light called MARGINAL", "MARGINAL" in v, True)
+    check("max gain: NOT called optimal", "optimal" in v, False)
+
+    v = line(mkjournal(CAM_L,
+                       "   applied gain 60 / exposure 3453 - confirmed. 5.8 px of smear"))
+    check("mid gain: workable", "workable" in v, True)
+
+
+def test_danger_is_always_appended():
+    """A stray local NT server is silent and loses matches. Never omit it."""
+    print("\nverdict - DANGER rides on every outcome")
+    cases = {
+        "no log":        ([], "no systemd journal"),
+        "never ran":     ([], ""),
+        "baseline only": (mkjournal("baseline for 1 camera(s): Left", CAM_L,
+                                    "boot baseline done in 1 s: ok=True"), ""),
+        "too dark":      (mkjournal(CAM_L, "   even gain 100 cannot see the tags"), ""),
+        "good tune":     (mkjournal(CAM_L, "   applied gain 20 / exposure 3453 - confirmed"), ""),
+        "no cameras":    (mkjournal("no cameras reported by PhotonVision"), ""),
+    }
+    for label, (rows, note) in sorted(cases.items()):
+        text, ready = pts.verdict(rows, note, nt_local_on=True, now=NOW)
+        check("%-14s carries DANGER" % label, "DANGER" in text, True)
+        check("%-14s never ready with NT on" % label, ready, False)
+    for label, (rows, note) in sorted(cases.items()):
+        text, _r = pts.verdict(rows, note, nt_local_on=False, now=NOW)
+        check("%-14s silent when NT is off" % label, "DANGER" in text, False)
+
+
+def test_age():
+    print("\n_age - relative time a human reads")
+    secs, text = pts._age(STAMP, NOW)
+    check("13 minutes", text, "13 min ago")
+    check("seconds returned too", round(secs), 780)
+    _s, t = pts._age("2026-11-16T14:59:30+0000", NOW)
+    check("under 90s is 'just now'", t, "just now")
+    _s, t = pts._age("2026-11-16T11:00:00+0000", NOW)
+    check("hours", t, "4 h ago")
+    _s, t = pts._age("2026-11-13T15:00:00+0000", NOW)
+    check("days", t, "3 days ago")
+    _s, t = pts._age("", NOW)
+    check("no stamp", t, "time unknown")
+    _s, t = pts._age("not a date", NOW)
+    check("garbage stamp", t, "time unreadable")
+    _s, t = pts._age("2026-11-17T15:00:00+0000", NOW)
+    check("a stamp in the future blames the clock", "clock is wrong" in t, True)
+
+
+def test_uptime_overrides_a_lying_clock():
+    """An entry from THIS boot cannot be older than the uptime.
+
+    The Pi has no RTC battery and no NTP on an isolated network. Its journal
+    said a baseline that ran forty minutes earlier was "18 days ago", which a
+    teenager reads as stale vision. Uptime settles it without guessing.
+    """
+    print("\nverdict - uptime beats a lying clock")
+    stale = pts.parse_journal(
+        "2026-10-29T23:42:10+0000 h p[1]: Started photontune.service - PhotonTune\n"
+        "2026-10-29T23:42:16+0000 h p[1]: baseline for 1 camera(s): Left\n"
+        "2026-10-29T23:42:16+0000 h p[1]: " + CAM_L + "\n"
+        "2026-10-29T23:42:18+0000 h p[1]: boot baseline done in 1 s: ok=True\n")
+    loud, _r = pts.verdict(stale, "", now=NOW)
+    check("without uptime it reports the bogus age", "18 days ago" in loud, True)
+    fixed, _r = pts.verdict(stale, "", now=NOW, uptime=1860)   # up 31 min
+    check("with uptime it says this boot",
+          "earlier this boot" in fixed, True)
+    check("and names the clock as the reason",
+          "clock was wrong" in fixed, True)
+    check("a real age survives when uptime is long enough",
+          "13 min ago" in pts.verdict(
+              mkjournal(CAM_L, "   applied gain 20 / exposure 1 - confirmed"),
+              "", now=NOW, uptime=86400)[0], True)
+
+
 if __name__ == "__main__":
     for fn in (test_parse, test_last_run_anchors_on_the_boundary, test_decisive,
-               test_no_boundary_means_one_run, test_journal_without_journalctl):
+               test_no_boundary_means_one_run, test_journal_without_journalctl,
+               test_verdict_cases, test_danger_is_always_appended, test_age,
+               test_uptime_overrides_a_lying_clock):
         fn()
     print("")
     if FAILED:

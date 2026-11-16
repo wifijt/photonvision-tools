@@ -380,12 +380,62 @@ That puts `preflight.py` and `photontune_status.py` in `/opt/photontune` and a
 restarts nothing; re-running it is how you upgrade. Then, on the Pi:
 
 ```sh
-photontune-status              # the journal, plus NT if a server is up
+photontune-status              # ONE LINE. This is the one to put on a card.
+photontune-status --tune       # start a tune and follow it to the end
+photontune-status -v           # the full report
 photontune-status --all        # every journal line, with boot boundaries
 photontune-status --boots -1   # the previous boot only
-photontune-status --watch      # follow a tune live (needs NT)
+photontune-status --watch      # follow a tune someone else started
 photontune-status --host rio   # on a robot
 ```
+
+The default is one sentence, because nobody in a pit reads seventy lines:
+
+```
+Photon tune status: tune ran 13 min ago, light levels optimal, applied to Left and Right
+Photon tune status: baseline only on Left and Right, applied 4 min ago. NO TUNE since last boot - run `photontune-status --tune` to tune
+Photon tune status: tune FAILED 2 min ago - light levels TOO LOW for competition
+Photon tune status: ERROR Left camera NOT FOUND (1 min ago)
+Photon tune status: PhotonVision never came up 3 min ago - photontune gave up, nothing was set
+Photon tune status: tune ran 5 min ago but the camera did NOT take the settings - check it by hand
+Photon tune status: photontune has NEVER run on this box
+```
+
+It exits **0 only when vision is actually ready**, so it works in a script.
+
+**Light level comes from the applied gain**, which is the only honest measure
+available: the walk visits six points from 0 to `--max-gain` (default 100), so
+gain 20 or below means the scene had light to spare, 80 or above means it barely
+worked, and a refusal means it did not work at all. Nothing here is inferred
+from a metric photontune does not publish.
+
+**And the one safety item is always appended**, whatever else the line says:
+
+```
+Photon tune status: ... *** DANGER: local NT server is ON - turn it OFF before the robot ***
+```
+
+PhotonVision's own NT server must be off whenever a roboRIO is present or the
+two fight and both go quiet, with no error anywhere. It is one TCP connect to
+`5810` to detect, so it is checked on every run. `--pv-host` sets which box gets
+checked — not the same question as `--host`, because on a robot `--host` is the
+roboRIO and *that* serving NT is correct.
+
+### Starting a tune
+
+`/PhotonTune/run` is a **NetworkTables boolean, not a shell command.** Before
+`--tune` existed the only things that could write it were the Elastic dashboard
+(`dashboards/photontune-elastic.json`), robot code, or a hand-rolled script —
+a strange answer to "how do I tune the cameras". AdvantageScope can watch the
+table but cannot write to it.
+
+```sh
+photontune-status --tune
+```
+
+sets the flag, prints progress as it goes, and reports the result. photontune
+clears the flag itself when it finishes, and **refuses while the robot is
+enabled** — that interlock is its own, and `--tune` does not work around it.
 
 From a laptop, with no journal of its own, read the Pi's over ssh:
 
