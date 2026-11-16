@@ -171,14 +171,19 @@ def test_verdict_cases():
     v = line(mkjournal("baseline for 2 camera(s): Left, Right", CAM_L,
                        "   baseline: already correct",
                        "boot baseline done in 1 s: ok=True Left: already correct"))
-    check("baseline only: says baseline only", "baseline only" in v, True)
-    check("baseline only: names both cameras",
-          "Left and Right" in v, True)
-    check("baseline only: says NO TUNE", "NO TUNE" in v, True)
-    check("baseline only: does NOT look like a shell command",
+    check("baseline ran: says it CHECKED, not that nothing happened",
+          "baseline checked" in v, True)
+    check("baseline ran: says the settings were already correct",
+          "already correct" in v, True)
+    check("baseline ran: names both cameras", "Left and Right" in v, True)
+    check("baseline ran: does NOT look like a shell command",
           "/PhotonTune/run true" in v, False)
-    check("baseline only: points at the real command",
-          "--tune" in v, True)
+    check("baseline ran: claims only that nothing was RECORDED",
+          "No tune RECORDED" in v, True)
+    check("baseline ran: does NOT assert no tune happened",
+          "NO TUNE since last boot" in v, False)
+    check("baseline ran: says a hand-run tune is invisible",
+          "run by hand is not" in v, True)
     check("baseline only: not ready", ready(mkjournal(
         "baseline for 2 camera(s): Left, Right", CAM_L,
         "boot baseline done in 1 s: ok=True")), False)
@@ -292,11 +297,100 @@ def test_uptime_overrides_a_lying_clock():
               "", now=NOW, uptime=86400)[0], True)
 
 
+def test_parse_local():
+    print("\nparse_local - the wrapper's own log format")
+    rows = pts.parse_local(
+        "2026-11-16T14:52:35+0000 photontune manual run started:\n"
+        "2026-11-16T14:52:35+0000 \u2500\u2500 Left \u2500\u2500  current exposure 3453, gain 60\n"
+        "2026-11-16T14:52:36+0000    applied gain 20 / exposure 3453 - confirmed\n"
+        "2026-11-16T14:52:37+0000 photontune manual run finished: exit=0\n")
+    check("row count", len(rows), 4)
+    check("stamp split off", rows[0][0], "2026-11-16T14:52:35+0000")
+    check("banner kept as the anchor",
+          "manual run started" in rows[0][1], True)
+    check("exit line kept", "exit=0" in rows[3][1], True)
+    check("empty is empty", pts.parse_local(""), [])
+    odd = pts.parse_local("no timestamp here\n")
+    check("an unstamped line is kept, not dropped", len(odd), 1)
+    check("...with an empty stamp", odd[0][0], "")
+
+
+def test_local_log_absent_is_not_an_error():
+    """Nothing run by hand yet is the NORMAL state, not a failure."""
+    print("\nlocal_log - a missing file")
+    rows, note = pts.local_log("/nonexistent/photontune.log")
+    check("no rows", rows, [])
+    check("and no complaint", note, "")
+
+
+def test_merge():
+    print("\nmerge - one timeline from two sources")
+    j = pts.parse_journal(
+        "2026-11-16T10:00:00+0000 h p[1]: Started photontune.service\n"
+        "2026-11-16T10:00:01+0000 h p[1]: boot baseline done in 1 s: ok=True\n")
+    l = pts.parse_local(
+        "2026-11-16T11:00:00+0000 photontune manual run started:\n"
+        "2026-11-16T11:00:30+0000    applied gain 20 / exposure 3453 - confirmed\n")
+    both = pts.merge(j, l)
+    check("every row survives", len(both), len(j) + len(l))
+    stamps = [t for t, _m in both if t]
+    check("in time order", stamps, sorted(stamps))
+    check("the manual run is last",
+          "confirmed" in both[-1][1], True)
+    check("one empty source returns the other", pts.merge(j, []), j)
+    check("the other empty source too", pts.merge([], l), l)
+
+
+def test_manual_run_is_an_anchor():
+    """last_run must find a hand-run tune's start, which has no service line."""
+    print("\nlast_run - a manual run is its own boundary")
+    rows = pts.merge(
+        pts.parse_journal(
+            "2026-11-16T10:00:00+0000 h p[1]: Started photontune.service\n"
+            "2026-11-16T10:00:01+0000 h p[1]: baseline for 1 camera(s): Left\n"
+            "2026-11-16T10:00:02+0000 h p[1]: boot baseline done in 1 s: ok=True\n"),
+        pts.parse_local(
+            "2026-11-16T11:00:00+0000 photontune manual run started:\n"
+            "2026-11-16T11:00:10+0000 " + CAM_L + "\n"
+            "2026-11-16T11:00:30+0000    applied gain 20 / exposure 3453 - confirmed\n"))
+    recent, _d = pts.last_run(rows)
+    text = " ".join(m for _t, m in recent)
+    check("starts at the manual banner",
+          "manual run started" in recent[0][1], True)
+    check("does not reach back to the boot baseline",
+          "boot baseline done" in text, False)
+    line, ready = pts.verdict(rows, "", local_seen=True,
+                              now=datetime.datetime(2026, 11, 16, 11, 1, 0,
+                                                    tzinfo=datetime.timezone.utc))
+    check("the hand-run tune is what gets reported",
+          "applied to Left" in line, True)
+    check("and it reads as ready", ready, True)
+
+
+def test_caveat_depends_on_the_local_log():
+    """Do not warn that a tune might be invisible when it could not be."""
+    print("\nverdict - the invisibility caveat is conditional")
+    base = mkjournal("baseline for 1 camera(s): Left", CAM_L,
+                     "   baseline: already correct",
+                     "boot baseline done in 1 s: ok=True Left: already correct")
+    blind, _r = pts.verdict(base, "", now=NOW, local_seen=False)
+    check("no local log: warns a hand run is unseen",
+          "run by hand is not" in blind, True)
+    seen, _r = pts.verdict(base, "", now=NOW, local_seen=True)
+    check("local log present: does NOT warn",
+          "run by hand is not" in seen, False)
+    check("local log present: says to run photontune",
+          "run `photontune` to do one" in seen, True)
+
+
 if __name__ == "__main__":
     for fn in (test_parse, test_last_run_anchors_on_the_boundary, test_decisive,
                test_no_boundary_means_one_run, test_journal_without_journalctl,
                test_verdict_cases, test_danger_is_always_appended, test_age,
-               test_uptime_overrides_a_lying_clock):
+               test_uptime_overrides_a_lying_clock, test_parse_local,
+               test_local_log_absent_is_not_an_error, test_merge,
+               test_manual_run_is_an_anchor,
+               test_caveat_depends_on_the_local_log):
         fn()
     print("")
     if FAILED:

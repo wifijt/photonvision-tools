@@ -48,7 +48,7 @@ if [ -n "$KEY" ]; then
 fi
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-for f in preflight.py monitor/photontune_status.py; do
+for f in preflight.py monitor/photontune_status.py setup/photontune-wrapper.sh; do
     if [ ! -f "$HERE/$f" ]; then
         echo "missing $f - run this from the repo root" >&2
         exit 1
@@ -82,7 +82,7 @@ WRAPPER
 echo "copying to $TARGET:/tmp ..."
 # shellcheck disable=SC2086  # SSH_OPTS must word-split
 scp -q $SSH_OPTS "$HERE/preflight.py" "$HERE/monitor/photontune_status.py" \
-    "$WRAP" "$TARGET:/tmp/" || {
+    "$HERE/setup/photontune-wrapper.sh" "$WRAP" "$TARGET:/tmp/" || {
         echo "" >&2
         echo "scp to $TARGET failed. Usually one of:" >&2
         echo "  - the host is unreachable          ping it" >&2
@@ -98,9 +98,22 @@ ssh $SSH_OPTS "$TARGET" "set -e
     sudo cp /tmp/preflight.py /opt/photontune/preflight.py
     sudo cp /tmp/photontune_status.py /opt/photontune/photontune_status.py
     sudo cp /tmp/$WRAPNAME /usr/local/bin/photontune-status
+    sudo cp /tmp/photontune-wrapper.sh /usr/local/bin/photontune
     sudo chmod 644 /opt/photontune/preflight.py
-    sudo chmod 755 /opt/photontune/photontune_status.py /usr/local/bin/photontune-status
-    rm -f /tmp/$WRAPNAME"
+    sudo chmod 755 /opt/photontune/photontune_status.py \
+                   /usr/local/bin/photontune-status /usr/local/bin/photontune
+    # The log has to be writable by whoever runs a tune, not only by root, or
+    # the wrapper falls back to sudo on every single run.
+    sudo mkdir -p /var/log/photontune
+    sudo chown \$(id -un) /var/log/photontune
+    # And it must not fill the SD card. An unrotated log on a box that is
+    # power-cycled by yanking the plug is how a card dies.
+    printf '%s\n' \
+      '/var/log/photontune/photontune.log {' \
+      '    weekly' '    rotate 4' '    size 2M' '    missingok' \
+      '    notifempty' '    compress' '    copytruncate' '}' \
+      | sudo tee /etc/logrotate.d/photontune >/dev/null
+    rm -f /tmp/$WRAPNAME /tmp/photontune-wrapper.sh"
 
 echo "checking it runs ..."
 ssh $SSH_OPTS "$TARGET" 'photontune-status --help >/dev/null' || {
@@ -111,8 +124,10 @@ ssh $SSH_OPTS "$TARGET" 'photontune-status --help >/dev/null' || {
 
 echo ""
 echo "done. On $TARGET:"
-echo "    photontune-status              # the last tune and the boot baseline"
-echo "    photontune-status --watch      # follow a tune while it runs"
+echo "    photontune                     # tune, logged, one line of output"
+echo "    photontune -v                  # ...and watch the gain walk"
+echo "    photontune-status              # one line: is vision ready?"
+echo "    photontune-status -v           # the full report"
 echo "    photontune-status --host rio   # on a robot"
 echo ""
 echo "If it reports no NetworkTables server, that is the expected answer on a"

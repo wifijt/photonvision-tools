@@ -75,15 +75,24 @@ OPTIONS
                        0 is this boot, -1 the one before
     --lines            most journal lines to read  (default 4000)
     --table            NT table photontune publishes to  (default PhotonTune)
-    --tune             START A TUNE and follow it to the end. This WRITES: it
-                       sets /PhotonTune/run true, the only thing that starts
-                       one. photontune refuses while the robot is enabled.
-                       Needs NetworkTables
+    --tune             ask the running SERVICE to tune, and follow it. With a
+                       shell on the box, `python3
+                       /opt/photontune/photontune.py` is simpler and shows
+                       more. Use this when the result must be RECORDED: a
+                       direct run prints to your terminal and is logged
+                       nowhere, so this tool cannot see it afterwards. WRITES
+                       /PhotonTune/run. Needs NetworkTables
     --watch            follow a tune live. This one DOES need NetworkTables,
                        because progress is only published there
     --interval         seconds between --watch samples  (default 2.0)
     --brief            skip the full result JSON, print its size instead
-    --no-journal       skip the journal and report NetworkTables only
+    --log              the `photontune` wrapper's local log, which is the only
+                       record of a tune run by hand - journald sees the service
+                       and nothing else
+    --no-journal       skip the systemd journal (the service's runs). The local
+                       log is still read
+    --no-local         skip the local log (runs by hand). The journal is still
+                       read
     --settle           seconds to let the NT table populate after connecting.
                        NT delivers values asynchronously, so reading
                        immediately after isConnected() gets defaults and
@@ -236,6 +245,75 @@ def parse_journal(text):
     return rows
 
 
+#: Where the `photontune` wrapper appends a timestamped copy of every run.
+LOCAL_LOG = "/var/log/photontune/photontune.log"
+
+
+def local_log(path=LOCAL_LOG, lines=4000, ssh=None, key=None):
+    """The wrapper's log as [(stamp, message)], oldest first.
+
+    The journal only ever holds the SERVICE's runs. This file holds the ones
+    somebody typed, which were previously recorded nowhere at all. Both are
+    read and merged, because either can contain the most recent tune and
+    picking one source means being wrong half the time.
+    """
+    cmd = ["tail", "-n", str(lines), path]
+    if ssh:
+        remote = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        if key:
+            remote += ["-i", key]
+        cmd = remote + [ssh, " ".join(cmd)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        out, err = proc.communicate(timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return [], "could not read %s" % path
+    if proc.returncode != 0:
+        detail = (err or b"").decode("utf-8", "replace").strip()
+        if "No such file" in detail:
+            return [], ""          # nothing has been run by hand: not an error
+        return [], detail.splitlines()[-1] if detail else "tail failed"
+    return parse_local(out.decode("utf-8", "replace")), ""
+
+
+def parse_local(text):
+    """"<iso> <message>" per line, which is what the wrapper writes."""
+    rows = []
+    for raw in text.splitlines():
+        raw = raw.rstrip()
+        if not raw:
+            continue
+        parts = raw.split(None, 1)
+        if len(parts) == 2 and "T" in parts[0] and parts[0][:2] == "20":
+            rows.append((parts[0], parts[1]))
+        else:
+            rows.append(("", raw))
+    return rows
+
+
+def merge(journal_rows, local_rows):
+    """Both sources in one timeline, oldest first.
+
+    Sorted on the stamp, which is safe because both come off the same box and
+    therefore share its clock - including when that clock is wrong. Rows with
+    no stamp keep their position relative to the row above.
+    """
+    if not local_rows:
+        return journal_rows
+    if not journal_rows:
+        return local_rows
+    tagged = []
+    for src, rows in (("j", journal_rows), ("l", local_rows)):
+        last = ""
+        for i, (stamp, msg) in enumerate(rows):
+            if stamp:
+                last = stamp
+            tagged.append((last, src, i, msg))
+    tagged.sort(key=lambda r: (r[0], r[1], r[2]))
+    return [(stamp, msg) for stamp, _src, _i, msg in tagged]
+
+
 def last_run(rows):
     """The most recent RUN in full, plus every decisive line in the journal.
 
@@ -255,7 +333,9 @@ def last_run(rows):
     however many cameras that is.
     """
     anchors = [i for i, (_t, m) in enumerate(rows)
-               if m.startswith("@@BOOT") or "Started photontune.service" in m]
+               if m.startswith("@@BOOT")
+               or "Started photontune.service" in m
+               or "photontune manual run started" in m]
     decisive = [(t, m) for t, m in rows
                 if not m.startswith("@@BOOT")
                 and any(k.lower() in m.lower() for k in DECISIVE)]
@@ -340,6 +420,21 @@ def show(s, full_json=True):
 #: light to spare; the top of the range means it barely worked.
 GAIN_GOOD = 20.0        # at or below: plenty of light
 GAIN_MARGINAL = 80.0    # at or above: running out of range
+
+#: What this tool can and cannot conclude from a silent journal.
+#:
+#: journald captures the SERVICE's output. photontune writes no logfile, so a
+#: tune somebody ran by hand - `python3 /opt/photontune/photontune.py`, which
+#: is the obvious thing to do with a shell - prints to their terminal and is
+#: recorded NOWHERE this tool can see. "NO TUNE since last boot" was therefore
+#: a claim about the world made from one of the two places a tune can happen.
+#: It is now a claim about the record, which is all the record can support.
+NOT_RECORDED = ("No tune RECORDED since boot - note a tune run by hand is not "
+                "logged, so this cannot see it")
+#: ...but once the wrapper's log exists, hand runs ARE recorded, and the caveat
+#: above would be stale reassurance in the wrong direction - telling someone a
+#: tune might have happened invisibly when it could not have.
+NOT_RUN = "No tune since boot - run `photontune` to do one"
 
 #: Phrases photontune logs when the scene defeats it outright.
 TOO_DARK = ("cannot see the tags", "cannot work at", "scene is too")
@@ -449,7 +544,8 @@ def _join(names):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def verdict(rows, note="", nt_local_on=False, now=None, uptime=None):
+def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
+            local_seen=False):
     """One line. What a teenager reads, and nothing else.
 
     Returns (text, ready) - ready is False whenever someone should look before
@@ -516,21 +612,51 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None):
             if m.strip().lower().startswith("baseline for"):
                 cams = [c.strip() for c in m.split(":", 1)[-1].split(",") if c.strip()]
         where = " on %s" % _join(cams) if cams else ""
-        if ok:
-            return ("baseline only%s, applied %s. NO TUNE since last boot - "
-                    "run `photontune-status --tune` to tune" % (where, when)) + danger, False
-        return ("baseline FAILED %s%s" % (when, where)) + danger, False
+        if not ok:
+            return ("baseline FAILED %s%s" % (when, where)) + danger, False
 
-    return ("photontune started %s but has done nothing since" % when) + danger, False
+        # "already correct" is the baseline RUNNING and finding nothing to do.
+        # Reporting that as if nothing happened is wrong: it ran, it checked,
+        # and the settings were right. Saying "no tune" about it also overstates
+        # what this tool knows - see NOT_RECORDED below.
+        unchanged = "already correct" in text
+        what = ("baseline checked%s %s - settings already correct, nothing "
+                "needed changing" % (where, when)) if unchanged else (
+               "baseline applied%s %s" % (where, when))
+        # local_seen means the wrapper's log was readable, so a hand-run tune
+        # WOULD be in it. Only without that can this tool be blind to one.
+        return (what + ". " + (NOT_RUN if local_seen else NOT_RECORDED)) + danger, False
+
+    return ("photontune started %s; nothing else recorded since. %s"
+            % (when, NOT_RUN if local_seen else NOT_RECORDED)) + danger, False
 
 
 def start_tune(table, inst, timeout=240.0, interval=2.0):
-    """Set /PhotonTune/run true and follow it to the end.
+    """Ask the RUNNING SERVICE to tune, by setting /PhotonTune/run true.
 
-    This is the ONLY way a tune starts. /PhotonTune/run is a NetworkTables
-    boolean, NOT a shell command, and until this flag existed the only things
-    that could write it were the Elastic dashboard, robot code, or a
-    hand-rolled script - a strange answer to "how do I tune the cameras".
+    If you have a shell on the box, this is NOT the easy way to tune. Just run
+    the tuner:
+
+        python3 /opt/photontune/photontune.py        # a real tune, ~45 s
+
+    The run lock is taken inside photontune's run() and released in finally,
+    so an idle daemon does not hold it and a direct run is not blocked. The
+    lock only stops two tunes colliding over the same cameras, which is what
+    it is for.
+
+    This flag exists for ONE reason, and it is not convenience: a direct run
+    prints to a terminal and is recorded nowhere. journald captures the
+    SERVICE's output, and photontune writes no logfile - so a tune you run by
+    hand is invisible to this tool afterwards, and `photontune-status` will
+    still say "NO TUNE since last boot" because as far as the journal is
+    concerned there was not one. Going through the service puts the result in
+    the journal and in NT, where it can be read back later and by someone
+    else.
+
+    So: tuning at the bench, run photontune directly and watch it. Tuning
+    something that needs to be ACCOUNTABLE afterwards - before a match, or for
+    a student who will be asked what the cameras are set to - go through the
+    service.
 
     photontune clears the flag itself when it finishes, and refuses outright
     while the robot is enabled. That interlock is its own and is not worked
@@ -690,10 +816,13 @@ def main():
     p.add_argument("--table", default="PhotonTune",
                    help="NT table photontune publishes to")
     p.add_argument("--tune", action="store_true",
-                   help="START A TUNE and follow it to the end. This WRITES: "
-                        "it sets /PhotonTune/run true, the only thing that "
-                        "starts one. photontune refuses while the robot is "
-                        "enabled. Needs NetworkTables")
+                   help="ask the running SERVICE to tune, and follow it. With "
+                        "a shell on the box, `python3 "
+                        "/opt/photontune/photontune.py` is simpler and shows "
+                        "more. Use this when the result must be RECORDED: a "
+                        "direct run prints to your terminal and is logged "
+                        "nowhere, so this tool cannot see it afterwards. "
+                        "WRITES /PhotonTune/run. Needs NetworkTables")
     p.add_argument("--watch", action="store_true",
                    help="follow a tune live. This one DOES need NetworkTables, "
                         "because progress is only published there")
@@ -701,8 +830,16 @@ def main():
                    help="seconds between --watch samples")
     p.add_argument("--brief", action="store_true",
                    help="skip the full result JSON, print its size instead")
+    p.add_argument("--log", default=LOCAL_LOG,
+                   help="the `photontune` wrapper's local log, which is the "
+                        "only record of a tune run by hand - journald sees "
+                        "the service and nothing else")
     p.add_argument("--no-journal", action="store_true",
-                   help="skip the journal and report NetworkTables only")
+                   help="skip the systemd journal (the service's runs). The "
+                        "local log is still read")
+    p.add_argument("--no-local", action="store_true",
+                   help="skip the local log (runs by hand). The journal is "
+                        "still read")
     p.add_argument("--settle", type=float, default=1.0,
                    help="seconds to let the NT table populate after "
                         "connecting. NT delivers values asynchronously, so "
@@ -744,21 +881,43 @@ def main():
         pv_host = a.ssh.split("@")[-1]
     nt_local_on = nt_server_here(pv_host)
 
+    # Two independent sources, two independent switches. --no-journal used to
+    # skip BOTH, which its name does not promise and which silently discarded
+    # the only record of a hand-run tune.
     rows, note = ([], "skipped (--no-journal)")
     if not a.no_journal:
         rows, note = journal(lines=a.lines, ssh=a.ssh, boots=a.boots,
                              key=a.ssh_key)
+    local, local_note = ([], "skipped (--no-local)")
+    if not a.no_local:
+        # The journal holds the service's runs; the wrapper's log holds the
+        # ones somebody typed. Either can be the most recent, so read both.
+        local, local_note = local_log(a.log, lines=a.lines, ssh=a.ssh,
+                                      key=a.ssh_key)
+    if local:
+        rows = merge(rows, local)
+        note = ""                         # a local log alone is enough
     up = uptime_seconds(ssh=a.ssh, key=a.ssh_key)
 
     if not (a.verbose or a.all):
-        line, ready = verdict(rows, note, nt_local_on, uptime=up)
+        line, ready = verdict(rows, note, nt_local_on, uptime=up,
+                              local_seen=not local_note)
         print("Photon tune status: %s" % line)
         sys.exit(0 if ready else 1)
 
     where = a.ssh or "this machine"
     print("Photon tune status: %s\n"
-          % verdict(rows, note, nt_local_on, uptime=up)[0])
-    print("journal from %s, NetworkTables at %s\n" % (where, a.host))
+          % verdict(rows, note, nt_local_on, uptime=up,
+                    local_seen=not local_note)[0])
+    sources = ["systemd journal (the service)"]
+    if local:
+        sources.append("%s (%d lines, runs by hand)" % (a.log, len(local)))
+    elif local_note:
+        sources.append("%s unreadable: %s" % (a.log, local_note))
+    else:
+        sources.append("%s absent - nothing run by hand yet" % a.log)
+    print("on %s: %s" % (where, ", ".join(sources)))
+    print("NetworkTables at %s\n" % a.host)
 
     if not a.no_journal:
         # Advice has to match what was actually tried. Telling someone to use
