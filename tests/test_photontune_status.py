@@ -579,9 +579,19 @@ def test_one_camera_tuned_the_other_did_not():
           "no tags seen" in line, False)
     check("does NOT blame the light",
           "light levels TOO LOW" in line, False)
-    check("blames the reading it measures against, which is what failed",
-          "the reading it measures against was bad" in line, True)
-    check("says what to do about it", "run it again" in line, True)
+    check("blames the look at the tag, which is what failed",
+          "could not get a clean look at it" in line, True)
+    # photontune now takes a second reading itself before giving up, so by the
+    # time this line exists the retry has happened and failed. "run it again"
+    # tells someone to redo by hand what the tool just did.
+    check("does not tell them to redo the retry the tuner already did",
+          "run it again" in line, False)
+    # It has to be sayable out loud. Two earlier attempts were not: "the
+    # max-gain reference was unusable" is jargon, and "the reading it
+    # measures against was bad" explains nothing to anyone.
+    for jargon in ("reference", "max-gain", "measures against"):
+        check("does not say %r" % jargon, jargon in line, False)
+    check("says what to do about it", "square on" in line, True)
     check("NOT reported as ready", ready, False)
 
 

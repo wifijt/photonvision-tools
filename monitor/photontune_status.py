@@ -748,10 +748,27 @@ def _why_failed(d):
     if seen == 0:
         return "no tags seen at any gain or exposure, check a tag is in front of it"
     if any(k in t for k in REF_UNUSABLE):
+        # Before the gain walk photontune takes one reading to learn what is
+        # in front of the camera, and that reading is the bar everything else
+        # is judged against. When it comes back bad there is no bar, so
+        # nothing can pass however well the walk then reads.
+        #
+        # This said "run it again", which was true of the OLD tuner and is now
+        # wrong: photontune takes a second reading itself before giving up, so
+        # by the time anybody reads this line the retry has already happened
+        # and already failed. Telling someone to redo by hand what the tool
+        # just did for them is worse than saying nothing.
+        #
+        # What is left is the tag. The first reading fails on too few
+        # detections or too much pose ambiguity, and both come from a tag that
+        # is oblique, far away, or small in frame - so that is the thing to
+        # go and look at. The count stays out of it: a mean over frames reads
+        # oddly as "1.00 tags" and is in the log and under -v anyway.
         if seen:
-            return ("saw %.2f tags but the reading it measures against was "
-                    "bad, run it again" % seen)
-        return "the reading it measures against was bad, run it again"
+            return ("saw a tag but could not get a clean look at it, check it "
+                    "is square on and not too far")
+        return ("could not get a clean look at the tag, check it is square on "
+                "and not too far")
     if any(k in t for k in TOO_DARK):
         return "light levels too low for competition"
     if any(k in t for k in NOTHING_SEEN):

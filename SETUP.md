@@ -395,7 +395,7 @@ the detail lives under `-v`. Every line below is real output, not a sketch:
 
 ```
 Photon tune status: tuned 13 min ago, light levels optimal, applied to Left and Right
-Photon tune status: tuned Right 13 min ago, light levels optimal. Left not tuned, saw 1.00 tags but the reading it measures against was bad, run it again
+Photon tune status: tuned Right 13 min ago, light levels optimal. Left not tuned, saw a tag but could not get a clean look at it, check it is square on and not too far
 Photon tune status: not tuned since boot, run photontune (baseline ran on Left and Right 13 min ago, already correct)
 Photon tune status: not tuned 13 min ago, no tags seen at any gain or exposure, check a tag is in front of it
 Photon tune status: not tuned 13 min ago, light levels too low for competition
