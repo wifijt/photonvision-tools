@@ -452,6 +452,23 @@ def show(s, full_json=True):
 #: Applied gain is the light measure. The walk visits six points from 0 to
 #: --max-gain (default 100), so the steps are 20. Low gain means the scene had
 #: light to spare; the top of the range means it barely worked.
+# HOW THIS LINE IS WRITTEN, and it is not a matter of taste.
+#
+# A student reads it, in front of other students, on a team where using an AI
+# at all is already contentious. So it is written the way the person who asked
+# for it writes: lower case, clauses separated by commas, no em-dashes, no
+# rhetorical questions, no "that is X, not Y", and no advice nobody asked for.
+# His own spec, verbatim, is the model:
+#
+#     Not run since last boot
+#     error cameras not found
+#     photon tune ran baseline only applied
+#     left camera not found
+#     photon tune ran, light levels too low for competition
+#     photontune ran 13 min ago, light levels optimal, tune applied to left and right
+#
+# Capitals are for the one word that matters, not for emphasis. A line that
+# needs a paragraph to explain itself belongs under -v, which is what -v is for.
 GAIN_GOOD = 20.0        # at or below: plenty of light
 GAIN_MARGINAL = 80.0    # at or above: running out of range
 
@@ -465,13 +482,12 @@ GAIN_MARGINAL = 80.0    # at or above: running out of range
 #: from one of the two places a tune can happen. This is used only when the
 #: local log is ABSENT, and it is a claim about the record, which is all the
 #: record can support.
-NOT_RECORDED = ("No tune RECORDED since %s - and there is no local log here, "
-                "so a tune somebody ran by hand would be INVISIBLE to this. "
-                "Do not read this as 'no tune happened'")
+NOT_RECORDED = ("not tuned since %s, but there is no log here so a tune run "
+                "by hand would not show up")
 #: ...but once the wrapper's log exists, hand runs ARE recorded, and the caveat
 #: above would be stale reassurance in the wrong direction - telling someone a
 #: tune might have happened invisibly when it could not have.
-NOT_RUN = "No tune since %s - run `photontune` to do one"
+NOT_RUN = "not tuned since %s, run photontune"
 
 #: Phrases photontune logs when the scene defeats it outright.
 TOO_DARK = ("cannot see the tags", "cannot work at", "scene is too")
@@ -581,9 +597,8 @@ def _light_phrase(gain):
     if gain <= GAIN_GOOD:
         return "light levels optimal"
     if gain >= GAIN_MARGINAL:
-        return "light levels MARGINAL (gain %g of %g - almost out of range)" % (
-            gain, GAIN_MARGINAL + 20)
-    return "light levels workable (gain %g)" % gain
+        return "light levels marginal, gain %g of %g" % (gain, GAIN_MARGINAL + 20)
+    return "light levels ok, gain %g" % gain
 
 
 def _join(names):
@@ -731,29 +746,27 @@ def _why_failed(d):
     t = d["text"]
     seen = d["max_tags"]
     if seen == 0:
-        return ("NO TAGS SEEN at any gain or exposure. Is a tag actually in "
-                "view?")
+        return "no tags seen at any gain or exposure, check a tag is in front of it"
     if any(k in t for k in REF_UNUSABLE):
         if seen:
-            return ("saw tags (up to %.2f) but the max-gain reference was "
-                    "unusable, so nothing could pass - run it again, or aim "
-                    "that tag squarer to the camera" % seen)
-        return "the max-gain reference was unusable, so nothing could pass"
+            return ("saw %.2f tags but the reading it measures against was "
+                    "bad, run it again" % seen)
+        return "the reading it measures against was bad, run it again"
     if any(k in t for k in TOO_DARK):
-        return "light levels TOO LOW for competition"
+        return "light levels too low for competition"
     if any(k in t for k in NOTHING_SEEN):
         return "nothing it tried worked"
-    return "no reason recorded"
+    return "no reason given"
 
 
 def _why_phrase(bad):
     """One phrase for the failed cameras - shared if they agree, named if not."""
-    whys = [c["why"] or "no reason recorded" for c in bad]
+    whys = [c["why"] or "no reason given" for c in bad]
     if len(set(whys)) == 1:
         if len(bad) > 1:
             return "%s (%s)" % (whys[0], _join([c["name"] for c in bad]))
         return whys[0]
-    return "; ".join("%s %s" % (c["name"], c["why"] or "no reason recorded")
+    return ", ".join("%s %s" % (c["name"], c["why"] or "no reason given")
                      for c in bad)
 
 
@@ -764,13 +777,13 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
     Returns (text, ready) - ready is False whenever someone should look before
     trusting vision, so a caller can colour or exit on it.
     """
-    danger = "  *** DANGER: local NT server is ON - turn it OFF before the robot ***" \
+    danger = "   DANGER local NT tables on, turn them off before the robot" \
              if nt_local_on else ""
 
     if note:
-        return ("cannot tell - no photontune log here (%s)" % note) + danger, False
+        return ("cannot tell, no photontune log here, %s" % note) + danger, False
     if not rows:
-        return "photontune has NEVER run on this box" + danger, False
+        return "photontune has never run on this box" + danger, False
 
     run, _decisive = last_run(rows)
     raw = " ".join(m for _t, m in run)      # case preserved: camera names
@@ -789,16 +802,16 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
         # missing is the difference between a fixable problem and a mystery.
         named = re.search(r"(?i)no camera matched ['\"]?([^'\".]+)", raw)
         if named:
-            return ("ERROR %s camera NOT FOUND (%s)"
+            return ("error %s camera not found, %s"
                     % (named.group(1).strip(), when)) + danger, False
-        return ("ERROR cameras not found (%s)" % when) + danger, False
+        return ("error cameras not found, %s" % when) + danger, False
 
     if "mismatch" in text:
-        return ("tune ran %s but the camera did NOT take the settings - check it by hand"
-                % when) + danger, False
+        return ("not tuned, the camera did not take the settings %s, check it "
+                "by hand" % when) + danger, False
 
     if "could not restore" in text:
-        return ("tune ABORTED %s and could not restore the exposure - check it by hand"
+        return ("stopped %s and could not put the exposure back, check it by hand"
                 % when) + danger, False
 
     # ---- per camera, because a run can have two answers ------------------
@@ -819,19 +832,18 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
 
     if done and bad:
         light = _light_phrase(_applied_gain(run))
-        head = "tune ran %s - applied to %s" % (
-            when, _join([c["name"] for c in done]))
+        head = "tuned %s %s" % (_join([c["name"] for c in done]), when)
         if light:
-            head += " (%s)" % light
-        return (head + "; %s FAILED - %s"
+            head += ", %s" % light
+        return (head + ". %s not tuned, %s"
                 % (_join([c["name"] for c in bad]), _why_phrase(bad))) + danger, False
 
     if bad:
-        return ("tune FAILED %s - %s" % (when, _why_phrase(bad))) + danger, False
+        return ("not tuned %s, %s" % (when, _why_phrase(bad))) + danger, False
 
     if done:
         light = _light_phrase(_applied_gain(run))
-        bits = ["tune ran %s" % when]
+        bits = ["tuned %s" % when]
         if light:
             bits.append(light)
         bits.append("applied to %s" % _join([c["name"] for c in done]))
@@ -840,15 +852,14 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
     # Nothing reached a per-camera verdict: an older log, or a run that died
     # before it named a camera. The run-level text is then all there is.
     if any(k in text for k in NOTHING_SEEN):
-        return ("tune FAILED %s - NO TAGS SEEN at any gain or exposure. Is a "
-                "tag actually in view? If it is, the scene is too dark for any "
-                "setting" % when) + danger, False
+        return ("not tuned %s, no tags seen at any gain or exposure, check a "
+                "tag is in front of it" % when) + danger, False
 
     if any(k in text for k in TOO_DARK):
-        return ("tune FAILED %s - light levels TOO LOW for competition" % when) + danger, False
+        return ("not tuned %s, light levels too low for competition" % when) + danger, False
 
     if "not ready within" in text:
-        return ("PhotonVision never came up %s - photontune gave up, nothing was set"
+        return ("not tuned, photonvision never came up %s so photontune gave up"
                 % when) + danger, False
 
     if "baseline" in text:
@@ -859,23 +870,32 @@ def verdict(rows, note="", nt_local_on=False, now=None, uptime=None,
                 cams = [c.strip() for c in m.split(":", 1)[-1].split(",") if c.strip()]
         where = " on %s" % _join(cams) if cams else ""
         if not ok:
-            return ("baseline FAILED %s%s" % (when, where)) + danger, False
+            return ("not tuned, baseline failed %s%s" % (when, where)) + danger, False
 
-        # "already correct" is the baseline RUNNING and finding nothing to do.
-        # Reporting that as if nothing happened is wrong: it ran, it checked,
-        # and the settings were right. Saying "no tune" about it also overstates
-        # what this tool knows - see NOT_RECORDED below.
+        # The one question this line answers is "did it tune?", and a baseline
+        # is not a tune - so the answer leads and the baseline is a clause in
+        # brackets. It used to lead, at length:
+        #
+        #     baseline checked on Left and Right 3 min ago - settings already
+        #     correct, nothing needed changing. No tune since photontune
+        #     restarted - run `photontune` to do one
+        #
+        # which is two sentences of explanation in front of the word the reader
+        # came for. The detail is still all there under -v. The baseline has to
+        # stay ON the line, though: dropping it would be the older bug, where a
+        # baseline that ran and found nothing to change was reported as if
+        # nothing had happened at all.
+        #
+        # local_seen means the local log was readable, so a hand-run tune WOULD
+        # be in it. Only without that can this tool be blind to one.
         unchanged = "already correct" in text
-        what = ("baseline checked%s %s - settings already correct, nothing "
-                "needed changing" % (where, when)) if unchanged else (
-               "baseline applied%s %s" % (where, when))
-        # local_seen means the wrapper's log was readable, so a hand-run tune
-        # WOULD be in it. Only without that can this tool be blind to one.
-        caveat = (NOT_RUN if local_seen else NOT_RECORDED) % _since(rows)
-        return (what + ". " + caveat) + danger, False
+        did = "ran%s %s, already correct" % (where, when) if unchanged else (
+              "applied%s %s" % (where, when))
+        head = (NOT_RUN if local_seen else NOT_RECORDED) % _since(rows)
+        return ("%s (baseline %s)" % (head, did)) + danger, False
 
-    return ("photontune started %s; nothing else recorded since. %s"
-            % (when, (NOT_RUN if local_seen else NOT_RECORDED) % _since(rows))
+    return ("%s (photontune started %s and recorded nothing since)"
+            % ((NOT_RUN if local_seen else NOT_RECORDED) % _since(rows), when)
             ) + danger, False
 
 

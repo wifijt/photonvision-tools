@@ -389,16 +389,20 @@ photontune-status --watch      # follow a tune someone else started
 photontune-status --host rio   # on a robot
 ```
 
-The default is one sentence, because nobody in a pit reads seventy lines:
+The default is one line, because nobody in a pit reads seventy. It always
+leads with the answer to the only question being asked - was it tuned - and
+the detail lives under `-v`. Every line below is real output, not a sketch:
 
 ```
-Photon tune status: tune ran 13 min ago, light levels optimal, applied to Left and Right
-Photon tune status: baseline only on Left and Right, applied 4 min ago. NO TUNE since last boot - run `photontune-status --tune` to tune
-Photon tune status: tune FAILED 2 min ago - light levels TOO LOW for competition
-Photon tune status: ERROR Left camera NOT FOUND (1 min ago)
-Photon tune status: PhotonVision never came up 3 min ago - photontune gave up, nothing was set
-Photon tune status: tune ran 5 min ago but the camera did NOT take the settings - check it by hand
-Photon tune status: photontune has NEVER run on this box
+Photon tune status: tuned 13 min ago, light levels optimal, applied to Left and Right
+Photon tune status: tuned Right 13 min ago, light levels optimal. Left not tuned, saw 1.00 tags but the reading it measures against was bad, run it again
+Photon tune status: not tuned since boot, run photontune (baseline ran on Left and Right 13 min ago, already correct)
+Photon tune status: not tuned 13 min ago, no tags seen at any gain or exposure, check a tag is in front of it
+Photon tune status: not tuned 13 min ago, light levels too low for competition
+Photon tune status: error Left camera not found, 13 min ago
+Photon tune status: not tuned, photonvision never came up 13 min ago so photontune gave up
+Photon tune status: not tuned, the camera did not take the settings 5 min ago, check it by hand
+Photon tune status: photontune has never run on this box
 ```
 
 It exits **0 only when vision is actually ready**, so it works in a script.
@@ -426,7 +430,7 @@ bench simply had no tag pointed at the camera.
 **And the one safety item is always appended**, whatever else the line says:
 
 ```
-Photon tune status: ... *** DANGER: local NT server is ON - turn it OFF before the robot ***
+Photon tune status: ...   DANGER local NT tables on, turn them off before the robot
 ```
 
 PhotonVision's own NT server must be off whenever a roboRIO is present or the
@@ -454,7 +458,7 @@ drift apart:
 $ photontune
 tuning... (~45 s; -v to watch, log in /var/log/photontune/photontune.log)
 
-Photon tune status: tune ran just now, light levels optimal, applied to Left and Right
+Photon tune status: tuned just now, light levels optimal, applied to Left and Right
 ```
 
 **Every run is logged locally**, to `/var/log/photontune/photontune.log`, with

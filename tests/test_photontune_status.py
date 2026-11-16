@@ -166,50 +166,50 @@ def test_verdict_cases():
           ready([], "no systemd journal"), False)
 
     v = line([])
-    check("never ran", "NEVER run" in v, True)
+    check("never ran", "never run" in v, True)
 
     v = line(mkjournal("baseline for 2 camera(s): Left, Right", CAM_L,
                        "   baseline: already correct",
                        "boot baseline done in 1 s: ok=True Left: already correct"))
-    check("baseline ran: says it CHECKED, not that nothing happened",
-          "baseline checked" in v, True)
+    check("baseline ran: says the baseline ran, not that nothing happened",
+          "baseline ran" in v, True)
     check("baseline ran: says the settings were already correct",
           "already correct" in v, True)
     check("baseline ran: names both cameras", "Left and Right" in v, True)
     check("baseline ran: does NOT look like a shell command",
           "/PhotonTune/run true" in v, False)
-    check("baseline ran: claims only that nothing was RECORDED",
-          "No tune RECORDED" in v, True)
-    check("baseline ran: does NOT assert no tune happened",
-          "NO TUNE since last boot" in v, False)
-    check("baseline ran: says a hand-run tune would be invisible",
-          "INVISIBLE" in v, True)
+    check("baseline ran: leads with the answer, which is no",
+          v.startswith("not tuned since"), True)
+    check("baseline ran: does not claim it was tuned",
+          "tuned since" in v and "applied to" not in v, True)
+    check("baseline ran: says a hand run would not show up",
+          "would not show up" in v, True)
     check("baseline only: not ready", ready(mkjournal(
         "baseline for 2 camera(s): Left, Right", CAM_L,
         "boot baseline done in 1 s: ok=True")), False)
 
     v = line(mkjournal("boot baseline skipped: PhotonVision not ready within 90s"))
     check("PV never came up: says so", "never came up" in v, True)
-    check("PV never came up: says nothing was set", "nothing was set" in v, True)
+    check("PV never came up: says photontune gave up", "gave up" in v, True)
 
     v = line(mkjournal("no cameras reported by PhotonVision at 127.0.0.1"))
-    check("no cameras: ERROR", v.startswith("ERROR"), True)
+    check("no cameras: error", v.startswith("error"), True)
     check("no cameras: says not found", "not found" in v, True)
 
     v = line(mkjournal("no camera matched 'Left'. Available: Right"))
-    check("named camera: names it", "Left camera NOT FOUND" in v, True)
+    check("named camera: names it", "Left camera not found" in v, True)
     check("named camera: keeps its capital L", "left camera" in v, False)
 
     v = line(mkjournal(CAM_L,
                        "   even gain 100 cannot see the tags at 3453 us - the scene is too dark"))
-    check("too dark: FAILED", "FAILED" in v, True)
+    check("too dark: says not tuned", v.startswith("not tuned"), True)
     check("too dark: the phrase he asked for",
-          "light levels TOO LOW for competition" in v, True)
+          "light levels too low for competition" in v, True)
 
     v = line(mkjournal(CAM_L,
                        "   *** MISMATCH *** wanted gain 40 / exposure 3000, camera reports 60"))
     check("mismatch: says the camera refused",
-          "did NOT take the settings" in v, True)
+          "did not take the settings" in v, True)
 
     good = mkjournal(
         CAM_L, "   lowest gain that sees every tag: 0. Applying 20 - one step",
@@ -223,12 +223,12 @@ def test_verdict_cases():
 
     v = line(mkjournal(CAM_L,
                        "   applied gain 100 / exposure 3453 - confirmed. 5.8 px of smear"))
-    check("max gain: light called MARGINAL", "MARGINAL" in v, True)
+    check("max gain: light called marginal", "light levels marginal" in v, True)
     check("max gain: NOT called optimal", "optimal" in v, False)
 
     v = line(mkjournal(CAM_L,
                        "   applied gain 60 / exposure 3453 - confirmed. 5.8 px of smear"))
-    check("mid gain: workable", "workable" in v, True)
+    check("mid gain: ok, with the number", "light levels ok, gain 60" in v, True)
 
 
 def test_danger_is_always_appended():
@@ -379,15 +379,13 @@ def test_caveat_depends_on_the_local_log():
                      "   baseline: already correct",
                      "boot baseline done in 1 s: ok=True Left: already correct")
     blind, _r = pts.verdict(base, "", now=NOW, local_seen=False)
-    check("no local log: warns a hand run would be INVISIBLE",
-          "INVISIBLE" in blind, True)
-    check("no local log: tells the reader not to misread it",
-          "Do not read this as" in blind, True)
+    check("no local log: says a hand run would not show up",
+          "would not show up" in blind, True)
     seen, _r = pts.verdict(base, "", now=NOW, local_seen=True)
-    check("local log present: does NOT warn",
-          "INVISIBLE" in seen, False)
+    check("local log present: does not say that",
+          "would not show up" in seen, False)
     check("local log present: says to run photontune",
-          "run `photontune` to do one" in seen, True)
+          "run photontune" in seen, True)
 
 
 #: A real failing run, 2026-11-16, abridged. Kept verbatim because this is the
@@ -438,20 +436,20 @@ def test_the_run_that_caught_the_lie():
           "photontune run started" in pts.last_run(rows)[0][0][1], True)
 
     line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
-    check("reported as FAILED", "FAILED" in line, True)
+    check("reported as not tuned", line.startswith("not tuned"), True)
     # The bench had no tag in view, which the user confirmed. A flat 0.00 at
     # every gain AND either exposure is "nothing to see", not "too dark" -
     # reporting it as light sends somebody to fetch lamps.
-    check("says NO TAGS SEEN, not 'too dark'",
-          "NO TAGS SEEN at any gain or exposure" in line, True)
+    check("says no tags seen, not 'too dark'",
+          "no tags seen at any gain or exposure" in line, True)
     check("does NOT blame the light outright",
-          "light levels TOO LOW" in line, False)
-    check("asks the question that actually resolves it",
-          "Is a tag actually in view?" in line, True)
+          "light levels too low" in line, False)
+    check("points at the thing that actually resolves it",
+          "check a tag is in front of it" in line, True)
     check("says when", "13 min ago" in line, True)
     check("NOT reported as ready", ready, False)
     check("does NOT claim no tune happened",
-          "No tune" in line, False)
+          "not tuned since" in line, False)
     check("does NOT claim it was only a baseline",
           "baseline" in line.lower(), False)
 
@@ -476,9 +474,8 @@ def test_a_missing_log_never_claims_no_tune():
     line, _r = pts.verdict(base, "", now=NOW, local_seen=seen)
     check("the line does NOT assert no tune happened",
           "No tune since boot" in line, False)
-    check("it says a hand run would be invisible", "INVISIBLE" in line, True)
-    check("and warns against misreading it",
-          "Do not read this as" in line, True)
+    check("it says a hand run would not show up",
+          "would not show up" in line, True)
 
 
 def test_dim_tags_are_not_the_same_as_no_tags():
@@ -490,7 +487,7 @@ def test_dim_tags_are_not_the_same_as_no_tags():
                     "   even gain 100 cannot see the tags at 863 us - the scene is too dark")
     v, _r = pts.verdict(dim, "", local_seen=True, now=NOW)
     check("dim: reported as light levels too low",
-          "light levels TOO LOW for competition" in v, True)
+          "light levels too low for competition" in v, True)
     check("dim: does not ask about tags being in view",
           "Is a tag actually in view?" in v, False)
 
@@ -500,9 +497,9 @@ def test_dim_tags_are_not_the_same_as_no_tags():
                      "   !! no gain from [0, 20, 40, 60, 80, 100] saw the tags at 863 us, "
                      "and neither a shorter nor a longer exposure did.")
     v, _r = pts.verdict(gone, "", local_seen=True, now=NOW)
-    check("absent: reported as NO TAGS SEEN", "NO TAGS SEEN" in v, True)
-    check("absent: still mentions dark as the fallback explanation",
-          "too dark for any setting" in v, True)
+    check("absent: reported as no tags seen", "no tags seen" in v, True)
+    check("absent: points at the camera, not the lamps",
+          "check a tag is in front of it" in v, True)
 
 
 #: The run that proved one verdict cannot describe two cameras. Verbatim from
@@ -576,15 +573,15 @@ def test_one_camera_tuned_the_other_did_not():
     check("Left's best tag count is kept", cams["Left"]["max_tags"], 1.0)
 
     line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
-    check("names the camera that WORKED", "applied to Right" in line, True)
-    check("names the camera that FAILED", "Left FAILED" in line, True)
+    check("names the camera that worked", line.startswith("tuned Right"), True)
+    check("names the camera that did not", "Left not tuned" in line, True)
     check("does NOT claim nothing was seen",
-          "NO TAGS SEEN" in line, False)
+          "no tags seen" in line, False)
     check("does NOT blame the light",
           "light levels TOO LOW" in line, False)
-    check("blames the reference, which is what failed",
-          "reference was unusable" in line, True)
-    check("says what to do about it", "aim that tag squarer" in line, True)
+    check("blames the reading it measures against, which is what failed",
+          "the reading it measures against was bad" in line, True)
+    check("says what to do about it", "run it again" in line, True)
     check("NOT reported as ready", ready, False)
 
 
@@ -616,9 +613,9 @@ def test_a_failure_cannot_erase_a_success():
         ]))
         line, ready = pts.verdict(rows, "", local_seen=True, now=NOW)
         check("Right still named (%s...)" % reason[:22],
-              "applied to Right" in line, True)
+              line.startswith("tuned Right"), True)
         check("Left still named (%s...)" % reason[:22],
-              "Left FAILED" in line, True)
+              "Left not tuned" in line, True)
         check("not ready (%s...)" % reason[:22], ready, False)
 
 
