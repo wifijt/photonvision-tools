@@ -20,12 +20,26 @@ Measured on the bench on 16 Nov, not guessed. Read this before step 0.
    `multitagResult`, so a 60 s record writes an empty file. Get two or more
    tags into one camera's view before anything in step 6 is worth running.
    This is the gate; nothing downstream improves until it is open.
-2. **No drivetrain on the bench.** Step 5b cannot run, so `--forward` cannot
-   resolve where robot forward points. The spin alone still gives
-   camera-to-camera geometry — compare that against the *difference* between
-   the two transforms below, not against either one absolutely.
-3. **No gyro attached.** Run without `--gyro-topic`. You lose the Pigeon
-   scale/sign check and the gyro-to-forward offset, and nothing else.
+2. **There is no robot.** `robotToCamera` is a transform *from the robot
+   frame*. On a bench there is no robot frame, so there is nothing for the
+   number to be relative to — and `--forward`, which resolves where robot
+   forward points, has nothing to resolve. Step 6 belongs on the robot.
+
+   The spin does measure camera-to-camera geometry without a robot, but that
+   is only worth anything if the two cameras are **already in their final
+   mounting, rigid to each other**. Loose on a table it is a true measurement
+   of nothing. Do not record a bench spin and compare it to the table below.
+3. **No gyro attached**, which only matters once 1 and 2 are solved. Run
+   without `--gyro-topic`; you lose the Pigeon scale/sign check and the
+   gyro-to-forward offset, and nothing else.
+
+**What the bench CAN settle, with no robot:**
+
+- camera intrinsics (ChArUco), which everything downstream sits on
+- exposure and gain, and whether the room's light pulses
+- getting multi-tag solves at all — tag spacing, range, angle
+- the whole toolchain end to end: `preflight` → discovery → warm-up
+- the robot-code camera-name fix, confirmed by one topic appearing
 
 **Robot-side, independent of all three:**
 
