@@ -7,6 +7,64 @@ why. This is the one to hold while the robot is on blocks.
 Goal: **`robotToCamera` for every camera, measured not guessed.** Everything
 else here exists to make that number trustworthy.
 
+---
+
+## State of play — Thursday 2026-11-19
+
+Measured on the bench on 16 Nov, not guessed. Read this before step 0.
+
+**Three things block a measured `robotToCamera` right now:**
+
+1. **No multi-tag solves.** Both cameras produce ~246 results per 3 s and
+   **zero** multi-tag. Every row of a spin recording comes from
+   `multitagResult`, so a 60 s record writes an empty file. Get two or more
+   tags into one camera's view before anything in step 6 is worth running.
+   This is the gate; nothing downstream improves until it is open.
+2. **No drivetrain on the bench.** Step 5b cannot run, so `--forward` cannot
+   resolve where robot forward points. The spin alone still gives
+   camera-to-camera geometry — compare that against the *difference* between
+   the two transforms below, not against either one absolutely.
+3. **No gyro attached.** Run without `--gyro-topic`. You lose the Pigeon
+   scale/sign check and the gyro-to-forward offset, and nothing else.
+
+**Robot-side, independent of all three:**
+
+The deployed code asks PhotonVision for cameras named `left` and `right`.
+They are published as `Left` and `Right`. NT paths are case-sensitive, so the
+robot's vision has never worked — and it fails **silently**, because asking
+for a camera that does not exist is not an error in photonlibpy.
+
+```
+PlankBot2026, branch betterVisionIntegration, 2b2c8e2, built 2026-01-17
+frc/robot/subsystems/vision/VisionConstants   camera0Name="left"  camera1Name="right"
+frc/robot/Constants$Vision                    "left", "right"
+frc/robot/subsystems/oldVision/CameraConstants "left", "right"
+```
+
+The one-topic test after fixing it: `/photonvision/Left/pipelineIndexRequest`
+appears on NT. That topic existing is proof the robot is asking for a camera
+that is really there.
+
+**What the robot currently believes about mounting**, to compare a solve
+against. Every figure is an exact 1/16 inch, so these are tape-measure
+numbers, not calibration:
+
+| | x | y | z | pitch | yaw |
+|---|---|---|---|---|---|
+| `robotToCamera0` "left"  | 13 1/4" | +10 3/16" | 10 15/16" | +5° | −15° |
+| `robotToCamera1` "right" | 14 1/8" | −10 9/16" | 10 3/4"   | +5° | +15° |
+
+Left and right disagree by 22 mm in x, 9.5 mm in |y| and 4.8 mm in z. Either
+the mounts are genuinely asymmetric or that is measurement slop, and a solve
+is what tells you which. A tape to the nearest 1/16" is ±0.8 mm *if the datum
+is right* — and the datum is the hard part, because the camera's optical
+centre sits behind the lens where no tape reaches. That is the number
+calibration actually recovers.
+
+Also: the robot loads `AprilTagFields.kDefaultField`, the official field, not
+a surveyed layout. Right on a real field, wrong for tags on stands. Check
+which layout the Pi has imported before trusting any bench pose.
+
 **Order matters and is not arbitrary:** calibration gives photontune the `fx`
 it needs, the layout gives it multi-tag solves to score on, and the spin is
 only as good as the detections underneath it. Doing these out of order does not
@@ -91,6 +149,29 @@ either can run tonight's tools or tells you which package it is short of.
 ---
 
 ## 1. Robot network — the three that waste evenings
+
+### Do this first — it has a verdict now
+
+```sh
+python3 preflight.py
+```
+
+It ends in `preflight ok`, or `PREFLIGHT FAILED: …` and a non-zero exit.
+Before 16 Nov it printed a table and exited 0 whatever it found, so "preflight
+passed" could be said of a run whose every line read UNREACHABLE. It now
+connects to NetworkTables itself and prints what is actually published:
+
+```
+NetworkTables     10.54.59.2     :5810  OK
+  coprocessor photonvision (…): Left, Right
+  cameras: Left, Right   [from the coprocessor's own cameraNames]
+  leftover tables, NOT cameras: left, right
+```
+
+If it lists cameras, step 6 will find them. If it does not, it names which of
+three causes it is looking at rather than guessing. A TCP connect to 5810
+succeeds against an NT server with nothing whatever on it, which is why the
+old all-OK table proved less than it appeared to.
 
 - [ ] **Pi's FRC address is a *secondary*.** Keep DHCP as the way back in.
       Lose that and you are on a monitor and keyboard.
@@ -341,8 +422,16 @@ photontune publishes under **`/PhotonTune`**. Set `run` true to start a tune.
 
 ```sh
 python3 mount/calibrate_mount.py record spin.npz 60 \
-    --host rio --motion spin --gyro-topic /SmartDashboard/Gyro
+    --host rio --motion spin
 ```
+
+**No `--cameras`.** It reads them from the coprocessor's own published list;
+the old hardcoded default rotted the day the cameras were renamed.
+
+**No `--gyro-topic` on this bench** — nothing is attached. On the robot it is
+`/AdvantageKit/Drive/Gyro/YawPosition`, **not** `/SmartDashboard/Gyro`, which
+does not exist. Note that `YawVelocityRadPerSec` is a *rate*: the tool now
+lists both and marks which is which.
 
 Counts down `SPIN IN PLACE in 3… 2… 1…` then records for 60 s.
 
@@ -352,7 +441,7 @@ Counts down `SPIN IN PLACE in 3… 2… 1…` then records for 60 s.
 
 ```sh
 python3 mount/calibrate_mount.py record drive.npz 30 \
-    --host rio --motion drive --gyro-topic /SmartDashboard/Gyro
+    --host rio --motion drive
 ```
 
 Counts down `DRIVE STRAIGHT in 3… 2… 1…` then records for 30 s.
@@ -426,6 +515,14 @@ None of these produce an error. All of them produce wrong answers.
 3. **Surveying before the field is finished**, or nudging a tag afterwards.
 4. **A stray tag on the floor** getting solved into the layout. The app now
    flags it — read the `FLAT:` line.
+5. **A camera name that exists and delivers nothing.** Constructing a
+   `PhotonCamera` with any name publishes three request topics under it, and
+   nothing removes them while that publisher is connected. A `left` sits
+   beside the real `Left`, accepts your `--cameras` argument, and records
+   nothing. Omit `--cameras` and let it discover. See `DEFECTS.md` §2.
+6. **The robot asking for a camera that is not there.** The same trap one
+   layer up. The robot reports no targets, exactly as it would with no tags
+   in view. See the state-of-play block at the top.
 
 ---
 

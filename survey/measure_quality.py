@@ -9,6 +9,9 @@
 # General Public License at <https://www.gnu.org/licenses/> for details.
 #
 import os
+# Not preflight.resolve_host: this file is a single-expression script with no
+# argparse and no import of preflight, so it keeps its own env var. $PV_HOST,
+# not $FRC_PI, and it does NOT understand the 'pi' role name.
 HOST=os.environ.get('PV_HOST','photonvision.local')
 import asyncio,json,sys,time,msgpack,websockets,numpy as np
 from collections import defaultdict

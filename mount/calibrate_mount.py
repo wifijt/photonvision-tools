@@ -1128,7 +1128,7 @@ if __name__ == "__main__":
                     help="the .npz to write (record) or read (solve). Name it spin.npz / drive.npz - --motion is guessed from it")
     ap.add_argument("seconds", nargs="?", type=float, default=60.0,
                     help="how long to record for")
-    ap.add_argument("--host", default="photonvision.local",
+    ap.add_argument("--host", default="pi",
                     help="the NetworkTables server - 'rio' on a robot. NOT the Pi: PhotonVision is an NT client there")
     ap.add_argument("--cameras", default=None,
                     help="comma-separated nicknames. Omit it and they are read "

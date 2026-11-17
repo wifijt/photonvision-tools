@@ -16,9 +16,9 @@ accurate layout, no robot and no calibration - only that the bolts have not
 moved.  When the measured transform between the two changes by more than the
 noise floor, something moved.
 
-    python3 camera_drift.py --host photonvision.local --baseline rig.json
+    python3 camera_drift.py --host pi --baseline rig.json
     ... later, or continuously ...
-    python3 camera_drift.py --host photonvision.local --watch rig.json
+    python3 camera_drift.py --host pi --watch rig.json
 
 WHY THIS ONE IS WORTH BUILDING WHEN THE REST WAS NOT
     A camera that shifts on its mount is a confirmed competition failure, it is
@@ -42,7 +42,7 @@ WHAT IT CANNOT DO
 
 OPTIONS
     --host             the PhotonVision box ('pi', or an address)  (default
-                       photonvision.local)
+                       'pi', which is $FRC_PI from preflight.py --setup)
     --port             PhotonVision's web/websocket port  (default 5800)
     --seconds          how long to watch the two cameras  (default 60)
     --baseline FILE    record the rig as it is now
@@ -182,7 +182,7 @@ def describe(pairs):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
+    p.add_argument("--host", default="pi",
                    help="the PhotonVision box ('pi', or an address)")
     p.add_argument("--port", type=int, default=5800,
                    help="PhotonVision's web/websocket port")

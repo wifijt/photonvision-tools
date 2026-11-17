@@ -11,7 +11,7 @@
 """Guided ChArUco capture: prompts where to put the board, then shoots it.
 
     # watch the mirrored view first, it is much easier to aim with
-    python3 ../calib/calib_view.py --host photonvision.local &
+    python3 ../calib/calib_view.py --host pi &
     open http://localhost:8078
 
     python3 charuco_capture.py --camera "OV9281" --dry-run     # rehearse
@@ -50,7 +50,7 @@ from are untouched.
 
 OPTIONS
     --host        the PhotonVision box ('pi', or an address) - calibration is
-                  written there  (default photonvision.local)
+                  written there  (default 'pi')
     --port        PhotonVision's web/websocket port  (default 5800)
     --camera      nickname, e.g. "OV9281"
     --mode        video mode index (default: whatever is active)
@@ -261,7 +261,7 @@ async def run(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
+    p.add_argument("--host", default="pi",
                    help="the PhotonVision box ('pi', or an address) - calibration is written there")
     p.add_argument("--port", type=int, default=5800,
                    help="PhotonVision's web/websocket port")

@@ -82,14 +82,14 @@ make one.
 
 ```sh
 # 0. sanity-check the calibration the solve will use
-python3 survey/photon_calib.py photonvision.local
+python3 survey/photon_calib.py pi
 
 # 1. record PhotonVision's own detected corners while you move the camera around
-python3 survey/capture_corners.py frames.json 120 --host photonvision.local
+python3 survey/capture_corners.py frames.json 120 --host pi
 
 # 2. bundle-adjust them into an AprilTagFieldLayout
 #    (intrinsics are fetched from PhotonVision - never hardcode them)
-python3 survey/solve_layout.py frames.json layout.json 0.1651 --host photonvision.local
+python3 survey/solve_layout.py frames.json layout.json 0.1651 --host pi
 
 # 3. upload (multipart, field name "data")
 curl -X POST -F "data=@layout.json" \
@@ -183,7 +183,7 @@ rotation and friends) to known-good values, live over the websocket, with a meas
 reason for each. `--explain` prints the reasoning; `--dry-run` shows what would change.
 
 ```sh
-python3 config/apply_baseline.py --host photonvision.local --dry-run
+python3 config/apply_baseline.py --host pi --dry-run
 python3 config/apply_baseline.py --explain
 ```
 
@@ -318,7 +318,7 @@ about that same axis, so fitting all the circles **together against one shared
 centre** recovers each camera's radius and bearing at once.
 
 ```sh
-python3 mount/calibrate_mount.py record spin.npz 60 --host photonvision.local
+python3 mount/calibrate_mount.py record spin.npz 60 --host pi
 python3 mount/calibrate_mount.py solve  spin.npz --origin-height 1.5415
 ```
 
@@ -555,7 +555,7 @@ GPLv3. See [LICENSE](LICENSE).
 `field_viewer.py` serves a live top-down field plan on your own machine. It reads
 PhotonVision over NetworkTables, works out where each camera is, and draws it.
 
-    python3 viz/field_viewer.py --host photonvision.local
+    python3 viz/field_viewer.py --host pi
     open http://localhost:8077
 
 It needs no configuration and no layout file. The tag layout is **reconstructed from

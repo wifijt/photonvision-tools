@@ -10,7 +10,7 @@
 #
 """Mirrored camera view for ChArUco calibration.
 
-    python3 calib_view.py --host photonvision.local
+    python3 calib_view.py --host pi
     open http://localhost:8078
 
 You stand in front of the camera holding the board, so moving it to YOUR left
@@ -32,7 +32,7 @@ first one counts.
 
 OPTIONS
     --host     the PhotonVision box ('pi', or an address). NOT the roboRIO -
-               this reads the camera stream  (default photonvision.local)
+               this reads the camera stream  (default 'pi')
     --port     PhotonVision API port  (default 5800)
     --serve    local port for this viewer  (default 8078)
     --team     FRC team number, so --host can be 'rio' or '.12'. Defaults to
@@ -236,7 +236,7 @@ tick(); setInterval(tick,2000);
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
+    p.add_argument("--host", default="pi",
                    help="the PhotonVision box ('pi', or an address). NOT the roboRIO - this reads the camera stream")
     p.add_argument("--port", type=int, default=5800, help="PhotonVision API port")
     p.add_argument("--serve", type=int, default=8078, help="local port for this viewer")

@@ -15,7 +15,7 @@ find out what yours are, so every team picks a number off a forum post.  This
 measures them, binned by RANGE and TAG COUNT, because that is how the error
 actually behaves - and emits a paste-ready Java constant.
 
-    python3 vision_stddev.py --host photonvision.local
+    python3 vision_stddev.py --host pi
 
 Hold the camera still.  Move it.  Hold it still somewhere else.  The tool finds
 the still periods by itself - each one is a "station" - and reports the scatter
@@ -38,8 +38,8 @@ WHAT THIS MEASURES, AND WHAT IT DOES NOT
     camera has motion blur and a stale timestamp on top of everything here.
 
 OPTIONS
-    --host         the PhotonVision box ('pi', or an address)  (default
-                   photonvision.local)
+    --host         the PhotonVision box ('pi', or an address)  (default 'pi',
+                   which is $FRC_PI from preflight.py --setup)
     --port         PhotonVision's web/websocket port  (default 5800)
     --seconds      how long to sample before reporting  (default 120)
     --cameras      comma-separated nicknames
@@ -333,7 +333,7 @@ def report(stations, args):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
+    p.add_argument("--host", default="pi",
                    help="the PhotonVision box ('pi', or an address)")
     p.add_argument("--port", type=int, default=5800,
                    help="PhotonVision's web/websocket port")

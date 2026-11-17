@@ -310,7 +310,7 @@ board to your left puts it on the right of the image and every correction you
 make is backwards.
 
 ```
-python3 calib/calib_view.py --host photonvision.local
+python3 calib/calib_view.py --host pi
 # then open http://localhost:8078
 ```
 
@@ -321,14 +321,14 @@ flipped image would produce a flipped calibration.
 **Rehearse without capturing anything:**
 
 ```
-python3 calib/charuco_capture.py --host photonvision.local --camera "OV9281" --dry-run
+python3 calib/charuco_capture.py --host pi --camera "OV9281" --dry-run
 ```
 
 **Then for real.** Check the board arguments match the sheet you actually
 printed — a size mismatch produces a confident, wrong calibration:
 
 ```
-python3 calib/charuco_capture.py --host photonvision.local --camera "OV9281" \
+python3 calib/charuco_capture.py --host pi --camera "OV9281" \
     --width 8 --height 8 --square 1.0 --marker 0.75 --family 4x4 --end
 ```
 

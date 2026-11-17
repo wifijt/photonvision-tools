@@ -10,7 +10,7 @@
 #
 """Does this case cook the Pi?
 
-    python3 heat_test.py --host photonvision.local --minutes 30 --ambient 22
+    python3 heat_test.py --host pi --minutes 30 --ambient 22
 
 Samples PhotonVision's own metrics over the websocket - no SSH, no credentials.
 `cpuThr` is PhotonVision's decode of `vcgencmd get_throttled`, so throttling is

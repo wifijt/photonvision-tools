@@ -13,7 +13,7 @@
 Reads PhotonVision's NetworkTables output, works out where each camera is, and
 draws it on a field plan in a browser.  Move the rig, watch the dot move.
 
-    python3 field_viewer.py --host 192.168.1.202
+    python3 field_viewer.py --host pi
     open http://localhost:8077
 
 It needs no configuration and no layout file.  The tag layout is RECONSTRUCTED
@@ -35,8 +35,8 @@ you do not have.
 OPTIONS
     --host              the NetworkTables server. With a robot on that is the
                         roboRIO, NOT the Pi - PhotonVision is only the NT
-                        server when runNTServer is on.  (default
-                        photonvision.local)
+                        server when runNTServer is on.  (default 'pi'; pass
+                        'rio' on a robot)
     --pv-host HOST      PhotonVision's own address, when it is not the NT
                         server. Only the camera FOV cones need it; poses come
                         over NT.
@@ -1088,7 +1088,7 @@ resize(); tick(); setInterval(tick,60);
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="photonvision.local",
+    p.add_argument("--host", default="pi",
                    help="the NetworkTables server. With a robot on that is the "
                         "roboRIO, NOT the Pi - PhotonVision is only the NT server "
                         "when runNTServer is on.")
