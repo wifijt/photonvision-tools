@@ -274,6 +274,10 @@ def _need_nt():
 def _check_cameras(inst, names, table="photonvision"):
     """Fail now if a nickname does not exist, rather than record nothing.
 
+    The names are read through preflight.nt_subtables, which subscribes and
+    waits. Reading them straight off a freshly connected instance is how a
+    server that is publishing normally reports as empty.
+
     NetworkTables paths are CASE-SENSITIVE. Asking for "left" when the camera
     is published as "Left" finds nothing, and photonlibpy's own complaint -
     "has not reported a message interface UUID - is your coprocessor's camera
@@ -281,7 +285,10 @@ def _check_cameras(inst, names, table="photonvision"):
     of which are wrong. It cost a session. The names are right there in NT, so
     there is no reason to guess.
     """
-    have = sorted(inst.getTable(table).getSubTables())
+    # Subscribed and waited for, not asked in the same breath as connecting.
+    # See preflight.nt_subtables - an unsubscribed NT4 client is told about
+    # nothing and reports a busy server as an empty one.
+    have = preflight.nt_subtables(inst, table)
     missing = [n for n in names if n not in have]
     if not missing:
         return have
@@ -298,10 +305,13 @@ def _check_cameras(inst, names, table="photonvision"):
             msg += ["", "    --cameras \"%s\""
                     % ",".join(dict(fixes).get(n, n) for n in names)]
     else:
-        msg += ["Nothing at all is published under /%s/." % table,
-                "PhotonVision is not reaching this NT server. On a robot the",
-                "server is the roboRIO and PhotonVision must be an NT CLIENT",
-                "pointed at it (runNTServer off)."]
+        # Shared with preflight so the two cannot drift, and so the three
+        # causes are named with the evidence that separates them rather than
+        # the one that is merely commonest.
+        others = [t for t in preflight.nt_top_level(inst) if t != table]
+        msg += [preflight.photon_absent_message(
+            inst.getConnections()[0].remote_ip if inst.getConnections() else "the NT server",
+            others, table)]
     sys.exit("\n".join(msg))
 
 

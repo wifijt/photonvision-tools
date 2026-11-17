@@ -297,6 +297,39 @@ def test_loopback_message():
     check("still reports the wait", "0.01s" in msg, True)
 
 
+def test_photon_absent_message():
+    """The message must name what fits the evidence, not what is commonest.
+
+    This is the one that cost an evening. A Pi that was UP, with cameras
+    tuned and working and runNTServer already off, was accused of running its
+    own NT server, because that was the only cause the message knew.
+    """
+    print("\nphoton_absent_message() - three causes, not one")
+    busy = pf.photon_absent_message("10.54.59.2:5810",
+                                    ["SmartDashboard", "FMSInfo", "LiveWindow"])
+    check("names the server as in use", "IS in use" in busy, True)
+    check("shows what it DID find", "SmartDashboard" in busy, True)
+    check("offers the runNTServer cause", "set_nt_server.py false" in busy, True)
+    check("says the restart is required", "restart photonvision" in busy, True)
+    check("also offers down-or-elsewhere",
+          "different address or team" in busy, True)
+
+    bare = pf.photon_absent_message("10.54.59.2:5810", [])
+    check("empty server: does not accuse photonvision",
+          "set_nt_server.py" in bare, False)
+    check("empty server: questions the server instead",
+          "not the server your robot code is using" in bare, True)
+    check("empty server: still names the host", "10.54.59.2:5810" in bare, True)
+
+
+def test_absent_message_never_contradicts_itself():
+    """It may not blame runNTServer on evidence that cannot support it."""
+    print("\nphoton_absent_message() - no unsupported accusations")
+    bare = pf.photon_absent_message("rio", [])
+    for word in ("DANGER", "its OWN NT server", "runNTServer"):
+        check("silent on %r with no evidence" % word, word in bare, False)
+
+
 def test_non_interactive():
     """A piped or scheduled run must not print half a question."""
     print("\ninteractive() - nobody to ask")
@@ -310,6 +343,8 @@ if __name__ == "__main__":
                test_validation, test_file, test_require_nt_message,
                test_require_nt_names_the_right_interface,
                test_loopback_message,
+               test_photon_absent_message,
+               test_absent_message_never_contradicts_itself,
                test_non_interactive):
         fn()
     print("")

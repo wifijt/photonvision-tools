@@ -509,6 +509,103 @@ def add_team_argument(parser):
                              "Defaults to $FRC_TEAM, then %s. Asked for once "
                              "and remembered if neither is set." % CONFIG)
 
+NT_PORT = 5810
+
+
+def nt_top_level(inst, settle=1.0):
+    """Every top-level table on the server, as evidence rather than a guess.
+
+    A PLAIN getSubTables() IS NOT ENOUGH. NT4 only announces topics a client
+    has subscribed to, so a client that subscribed to nothing sees nothing and
+    would report an empty server however busy it is. MultiSubscriber on "/"
+    is what makes the question answerable at all.
+    """
+    import time as _t
+    try:
+        import ntcore
+    except ImportError:
+        return []
+    sub = ntcore.MultiSubscriber(inst, ["/"])
+    try:
+        _t.sleep(settle)
+        names = set()
+        for t in inst.getTopics():
+            parts = t.getName().lstrip("/").split("/")
+            if len(parts) > 1:
+                names.add(parts[0])
+        return sorted(names)
+    finally:
+        sub.close()
+
+
+def nt_subtables(inst, table, settle=1.5):
+    """Subtables of /<table>/, after actually waiting to be told about them.
+
+    TWO WAYS TO READ A BUSY SERVER AS AN EMPTY ONE, and tools here have made
+    both. NT4 announces only the topics a client has SUBSCRIBED to, so an
+    instance that subscribed to nothing is told nothing and getSubTables()
+    returns [] however hard the coprocessor is publishing. And connecting
+    then asking in the same breath leaves no time for the announcements that
+    WERE asked for to arrive.
+
+    Either one reads exactly like "PhotonVision is not reaching this server",
+    which is how an evening goes into checking a Pi that is fine.
+    """
+    import time as _t
+    try:
+        import ntcore
+    except ImportError:
+        return sorted(inst.getTable(table).getSubTables())
+    sub = ntcore.MultiSubscriber(inst, ["/"])
+    try:
+        deadline = _t.time() + settle
+        while _t.time() < deadline:
+            found = sorted(inst.getTable(table).getSubTables())
+            if found:
+                return found
+            _t.sleep(0.1)
+        return sorted(inst.getTable(table).getSubTables())
+    finally:
+        sub.close()
+
+
+def photon_absent_message(host, others, table="photonvision"):
+    """Why /<table>/ is empty, naming every cause that fits the evidence.
+
+    THE POINT. "Nothing is published" has at least three causes - the
+    coprocessor is down, it is running its OWN NT server, or it is pointed
+    somewhere else - and they take different fixes. A message that picks one
+    sends people to prove things about the other two. That happened: a Pi that
+    was up, with cameras tuned and working, read as a configuration fault
+    because the only cause named was runNTServer, and an evening went into
+    checking a machine that was fine.
+
+    What separates the cases is already on the wire. If OTHER tables are
+    present, the server is alive and being used, so the absence is specific to
+    PhotonVision. If nothing at all is there, the absence says nothing about
+    PhotonVision and everything about which server this is.
+    """
+    msg = ["Nothing is published under /%s/ on %s." % (table, host), ""]
+    if others:
+        shown = ", ".join(others[:8]) + (", ..." if len(others) > 8 else "")
+        msg += ["This NT server IS in use - published right now:",
+                "    " + shown,
+                "",
+                "So the server is fine and %s is not reaching it. Either:" % table,
+                "  - it is running its OWN NT server, which is the common one.",
+                "    photontune-status says DANGER when it is. On the Pi:",
+                "        sudo python3 config/set_nt_server.py false",
+                "        sudo systemctl restart photonvision",
+                "    The restart is required - networkConfig is read at startup",
+                "    only, so nothing changes on a running instance.",
+                "  - or it is down, or set to a different address or team."]
+    else:
+        msg += ["Nothing else is on this server either, so this is not about",
+                "%s. Either nothing at all is publishing to %s," % (table, host),
+                "or this is not the server your robot code is using."]
+    return "\n".join(msg)
+
+
 if __name__ == "__main__":
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
@@ -561,6 +658,7 @@ if __name__ == "__main__":
         args = ["rio:5810", "pi:5800"] if team else ["pi:5800"]
         print("checking the usual two; name others as host[:port]")
     print("")
+    bad = []
     for h in args:
         host, _, port = h.rpartition(":")
         if not host:
@@ -570,3 +668,50 @@ if __name__ == "__main__":
         ok, detail = reachable(addr, port)
         label = addr if addr == host else "%s = %s" % (host, addr)
         print("%-28s :%-5d %s  (%s)" % (label, port, "OK" if ok else "UNREACHABLE", detail))
+        if not ok:
+            bad.append(label)
+
+    # Reachability is not the question anyone actually has. "Will my tools
+    # find the cameras" is, and it has a different answer: a Pi running its
+    # own NT server passes every TCP check above and still publishes nothing
+    # to the roboRIO. Checking it here is the difference between preflight
+    # meaning something and preflight being a table nobody reads.
+    if team and not bad:
+        print("")
+        try:
+            import ntcore
+        except ImportError:
+            print("NT publish check SKIPPED - pyntcore is not installed here")
+        else:
+            import time as _t
+            rio = resolve_host("rio", team)
+            inst = ntcore.NetworkTableInstance.getDefault()
+            inst.startClient4("preflight")
+            inst.setServer(rio, NT_PORT)
+            t0 = _t.time()
+            while _t.time() - t0 < 5 and not inst.isConnected():
+                _t.sleep(0.2)
+            if not inst.isConnected():
+                print("NetworkTables     %-14s :%-5d NOT CONNECTED" % (rio, NT_PORT))
+                bad.append("NetworkTables")
+            else:
+                tables = nt_top_level(inst)
+                if "photonvision" in tables:
+                    cams = sorted(n for n in
+                                  inst.getTable("photonvision").getSubTables())
+                    print("NetworkTables     %-14s :%-5d OK  - /photonvision/ %s"
+                          % (rio, NT_PORT, ", ".join(cams) if cams else "(no cameras yet)"))
+                else:
+                    print(photon_absent_message("%s:%d" % (rio, NT_PORT),
+                                                [t for t in tables if t != "photonvision"]))
+                    bad.append("/photonvision/")
+            inst.stopClient()
+
+    # A verdict. This printed a table and exited 0 whatever it found, so
+    # "preflight passed" could be said of a run whose every line read
+    # UNREACHABLE.
+    print("")
+    if bad:
+        print("PREFLIGHT FAILED: %s" % ", ".join(bad))
+        sys.exit(1)
+    print("preflight ok")
