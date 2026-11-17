@@ -392,9 +392,19 @@ def ask_team(why=""):
                          "  or give the Pi's address - %s.12 is a common choice.\n" % base)
         pi = _ask("  PhotonVision host", "photonvision.local")
 
+    pi2 = setting("FRC_PI2")
+    if not pi2 and interactive():
+        sys.stderr.write("\nIs there a SECOND PhotonVision box? Enter to skip.\n"
+                         "  Camera nicknames must be unique across both - NT\n"
+                         "  publishes them flat under /photonvision/<name>/,\n"
+                         "  with no coprocessor in the path.\n")
+        pi2 = _ask("  second host", "")
+
     saved = {"FRC_TEAM": team}
     if pi:
         saved["FRC_PI"] = pi
+    if pi2:
+        saved["FRC_PI2"] = pi2
     try:
         path = write_config(saved)
         sys.stderr.write("\nSaved to %s - you will not be asked again.\n"
@@ -406,6 +416,8 @@ def ask_team(why=""):
         os.environ["FRC_TEAM"] = team
         if pi:
             os.environ["FRC_PI"] = pi
+        if pi2:
+            os.environ["FRC_PI2"] = pi2
     return team
 
 
@@ -425,7 +437,7 @@ def setup():
         print("")
     _config_cache = {}
     saved_env = {}
-    for k in ("FRC_TEAM", "FRC_PI"):
+    for k in ("FRC_TEAM", "FRC_PI", "FRC_PI2"):
         if k in os.environ:
             saved_env[k] = os.environ.pop(k)
     _asked.discard("FRC_TEAM")
@@ -457,6 +469,7 @@ def resolve_host(value, team=None):
         rio / roborio   ->  10.TE.AM.2      the NT server on a robot
         radio           ->  10.TE.AM.1
         pi / photon     ->  $FRC_PI, else photonvision.local
+        pi2 / photon2   ->  $FRC_PI2, and an ERROR if that is not set
         .12             ->  10.TE.AM.12
         anything else   ->  itself
 
@@ -470,7 +483,12 @@ def resolve_host(value, team=None):
         return value
     v = str(value).strip()
     low = v.lower()
-    if low in ("pi", "photon", "photonvision", "coprocessor"):
+    if low in ("pi2", "photon2", "photonvision2", "coprocessor2"):
+        got = setting("FRC_PI2")
+        if not got:
+            sys.exit(_no_second_pi(v))
+        return got
+    if low in ("pi", "pi1", "photon", "photonvision", "coprocessor"):
         return setting("FRC_PI") or "photonvision.local"
     needs_team = low in ("rio", "roborio", "radio") or (
         v.startswith(".") and v[1:].isdigit())
@@ -486,6 +504,39 @@ def resolve_host(value, team=None):
             sys.exit(_no_team(v))
         return "%s%s" % (team_base(team), v)
     return v
+
+
+def _no_second_pi(value):
+    """`pi2` with nothing saved. Deliberately fatal, never a fallback.
+
+    Resolving a missing second coprocessor to the FIRST one would point a
+    camera tool at the wrong box, and nothing in its output would say so -
+    a calibration written to the wrong Pi looks exactly like a calibration.
+    The whole value of a role name is that it cannot quietly mean something
+    else.
+    """
+    return ("'%s' needs a second PhotonVision address and none is saved.\n\n"
+            "It does NOT fall back to the first Pi: a camera tool pointed at\n"
+            "the wrong box writes to the wrong box and says nothing about it.\n\n"
+            "    python3 preflight.py --setup        asks for both\n"
+            "    export FRC_PI2=10.54.59.13          this shell only\n" % value)
+
+
+def duplicate_camera_names(cops):
+    """{name: [coprocessors claiming it]} for every name claimed twice.
+
+    NT publishes cameras FLAT at /photonvision/<nickname>/ with no
+    coprocessor anywhere in the path. Two boxes that both call a camera
+    "Front" therefore write into one table, and nothing errors - the two
+    cameras' readings simply interleave, which looks like one camera with
+    impossible jitter. The fix is naming, and it has to happen before anyone
+    records anything.
+    """
+    seen = {}
+    for host, mac, names in cops:
+        for n in names:
+            seen.setdefault(n, []).append(host or mac)
+    return dict((n, who) for n, who in seen.items() if len(who) > 1)
 
 
 def _no_team(value):
@@ -738,7 +789,7 @@ if __name__ == "__main__":
 
     if "--show" in sys.argv:
         print("config file: %s%s" % (CONFIG, "" if os.path.exists(CONFIG) else "   (does not exist yet)"))
-        for k in ("FRC_TEAM", "FRC_PI"):
+        for k in ("FRC_TEAM", "FRC_PI", "FRC_PI2"):
             env, filed = os.environ.get(k), read_config().get(k)
             if env:
                 print("  %-9s %-20s from $%s (overrides the file)" % (k, env, k))
@@ -768,7 +819,9 @@ if __name__ == "__main__":
               % (team, team_base(team), team_base(team), team_base(team), src))
     if not args:
         args = ["rio:5810", "pi:5800"] if team else ["pi:5800"]
-        print("checking the usual two; name others as host[:port]")
+        if setting("FRC_PI2"):
+            args.append("pi2:5800")
+        print("checking the usual %d; name others as host[:port]" % len(args))
     print("")
     bad = []
     for h in args:
@@ -809,11 +862,35 @@ if __name__ == "__main__":
             else:
                 tables = nt_top_level(inst)
                 if "photonvision" in tables:
+                    cops = photon_cameras(inst, 2.0)
                     names, leftover, src = discover_cameras(inst)
                     print("NetworkTables     %-14s :%-5d OK" % (rio, NT_PORT))
-                    for host, mac, ns in photon_cameras(inst, 0.5):
+                    for host, mac, ns in cops:
                         print("  coprocessor %s (%s): %s"
                               % (host or "?", mac, ", ".join(ns) if ns else "no cameras"))
+
+                    # Is a box publishing that nobody gave us an address for?
+                    # NT knows about every coprocessor; the config file only
+                    # knows what someone typed. When they disagree, the config
+                    # is the one that is wrong, and --host pi2 is what breaks.
+                    configured = 1 + (1 if setting("FRC_PI2") else 0)
+                    if len(cops) > configured:
+                        print("  %d coprocessors are publishing, %d address%s saved."
+                              % (len(cops), configured,
+                                 " is" if configured == 1 else "es are"))
+                        print("  Camera tools reach a box by address, not over NT, so each")
+                        print("  one needs its own: python3 preflight.py --setup")
+                        bad.append("coprocessor addresses")
+
+                    dupes = duplicate_camera_names(cops)
+                    for n, who in sorted(dupes.items()):
+                        print("  NAME COLLISION: %r is published by %s"
+                              % (n, " and ".join(who)))
+                    if dupes:
+                        print("  A camera's NT path has no coprocessor in it, so these share")
+                        print("  one table and their readings interleave - which looks like")
+                        print("  one camera with impossible jitter. Rename before recording.")
+                        bad.append("camera name collision")
                     if names:
                         print("  cameras: %s   [from %s]" % (", ".join(names), src))
                     else:

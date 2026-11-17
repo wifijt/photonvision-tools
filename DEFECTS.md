@@ -84,7 +84,41 @@ code itself. Find the publisher rather than waiting it out.
 
 ---
 
-## 3. `--gyro-topic` could not read a struct heading
+## 3. Two coprocessors share one flat namespace
+
+**Condition.** A second Pi running PhotonVision on the same NetworkTables
+server. Not yet true here; written before it is, because both halves fail
+silently and both are fixed by naming rather than by code.
+
+**What happens, cameras.** A camera's NT path is `/photonvision/<nickname>/`
+with the coprocessor nowhere in it. Two boxes that both call a camera `Front`
+write into the same table. Nothing errors — the two cameras' readings
+interleave, which reads as one camera with impossible jitter.
+
+`preflight.py` now cross-checks: it lists every coprocessor publishing, flags
+any nickname claimed by more than one, and fails if NT shows more boxes than
+there are saved addresses. NT knows what is really out there; the config file
+only knows what somebody typed, and when they disagree the config is wrong.
+
+**What happens, photontune.** Its NT table is a single flat `/PhotonTune`
+(`--nt-table`, default `PhotonTune`). Two daemons would publish `status`,
+`busy`, `ok` and `result` into the same keys and both act on the same `run`
+flag. The symptom is a status line flickering between two machines' answers.
+
+**What to do.** Name cameras so they cannot collide — `FL/FR/BL/BR`, not
+`Left/Right` on each box. Give the second daemon `--nt-table PhotonTune2` in
+its unit file, and read it with `photontune_status --table PhotonTune2`. No
+code change is needed for either; the flags already exist.
+
+**And addresses.** Camera tools reach a box over HTTP, not NT, so each needs
+its own address: `--host pi` and `--host pi2`, from `FRC_PI` and `FRC_PI2`.
+`pi2` with nothing saved is a hard error on purpose — resolving it to the
+first Pi would write a calibration to the wrong machine, and a calibration on
+the wrong machine looks exactly like a calibration.
+
+---
+
+## 4. `--gyro-topic` could not read a struct heading
 
 **Condition.** A robot that publishes heading as `struct:Rotation2d` — which is
 what AdvantageKit does, so it is the common case, not the exotic one.
@@ -106,7 +140,7 @@ quaternion and is not handled — pass the `Rotation2d` topic, not the pose.
 
 ---
 
-## 4. Camera names were hardcoded, and rotted
+## 5. Camera names were hardcoded, and rotted
 
 **Condition.** Running `calibrate_mount` without `--cameras` after the cameras
 were renamed in PhotonVision.
@@ -122,7 +156,7 @@ the error named the cameras rather than the stale default.
 
 ---
 
-## 5. `preflight.py` had no verdict
+## 6. `preflight.py` had no verdict
 
 **Condition.** Running it at all.
 
@@ -139,7 +173,7 @@ publish check itself, printing the coprocessor, its cameras and any leftovers.
 
 ---
 
-## 6. macOS: a second link-local route can swallow the robot network
+## 7. macOS: a second link-local route can swallow the robot network
 
 **Condition.** A Mac on wifi AND on the robot network by USB Ethernet, talking
 to a device that fell back to a `169.254.x.x` address.
@@ -159,7 +193,7 @@ device a static address on the robot subnet so link-local never comes up.
 
 ---
 
-## 7. The Pi has no RTC battery and no `fake-hwclock`
+## 8. The Pi has no RTC battery and no `fake-hwclock`
 
 **Condition.** A power cut.
 
@@ -172,7 +206,7 @@ reboots, which is not correct but is far better than 1970.
 
 ---
 
-## 8. `~/.ssh/config`'s `photonvision` alias points at a dead address
+## 9. `~/.ssh/config`'s `photonvision` alias points at a dead address
 
 **Condition.** `ssh photonvision`.
 

@@ -183,6 +183,12 @@ sudo systemctl restart photonvision
 > | `set_streams` | **`pi`**, plus `--nt-server rio` for `--daemon` | it writes settings over the websocket and listens on NT |
 > | `field_viewer` | **`rio`** plus `--pv-host pi` | poses come over NT, the FOV cones come from the calibration |
 >
+> **With a second Pi**, every `pi` row above becomes `pi` *or* `pi2` and has
+> to be run once per box — they are reached by address, not over NT. The NT
+> rows are unchanged: one roboRIO, one server, all four cameras on it. Camera
+> nicknames must then be unique across both boxes, because a camera's NT path
+> has no coprocessor in it. `preflight.py` checks both and says so.
+>
 > Pointing an NT tool at the Pi is the classic way to lose an hour: it sits
 > there seeing nothing and looks broken. Pointing a camera tool at the roboRIO
 > fails immediately instead, which is at least honest.

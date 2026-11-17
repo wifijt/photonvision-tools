@@ -45,7 +45,7 @@ def fresh():
     pf.CONFIG = os.path.join(tempfile.mkdtemp(), ".photonvision-tools.conf")
     pf._config_cache = None
     pf._asked.clear()
-    for k in ("FRC_TEAM", "FRC_PI"):
+    for k in ("FRC_TEAM", "FRC_PI", "FRC_PI2"):
         os.environ.pop(k, None)
 
 
@@ -330,6 +330,55 @@ def test_absent_message_never_contradicts_itself():
         check("silent on %r with no evidence" % word, word in bare, False)
 
 
+def test_second_pi():
+    """A second coprocessor is a role, and a missing one is fatal.
+
+    THE POINT OF THE FATAL. Resolving 'pi2' to the FIRST Pi when none is
+    saved would point a camera tool at the wrong box, and a calibration
+    written to the wrong Pi looks exactly like a calibration. A role name
+    whose meaning can silently change is worse than no role name.
+    """
+    print("\nresolve_host('pi2') - the second coprocessor")
+    fresh()
+    pf.write_config({"FRC_TEAM": "5459", "FRC_PI": "10.54.59.12",
+                     "FRC_PI2": "10.54.59.13"})
+    check("pi  -> the first",  pf.resolve_host("pi"),  "10.54.59.12")
+    check("pi1 -> the first",  pf.resolve_host("pi1"), "10.54.59.12")
+    check("pi2 -> the second", pf.resolve_host("pi2"), "10.54.59.13")
+    check("photon2 is the same role", pf.resolve_host("photon2"), "10.54.59.13")
+
+    fresh()
+    pf.write_config({"FRC_TEAM": "5459", "FRC_PI": "10.54.59.12"})
+    try:
+        got = pf.resolve_host("pi2")
+        check("pi2 with none saved exits", "returned %r" % got, "SystemExit")
+    except SystemExit as e:
+        msg = str(e)
+        check("pi2 with none saved exits", True, True)
+        check("says it does not fall back", "does NOT fall back" in msg, True)
+        check("never hands back the FIRST Pi", "10.54.59.12" in msg, False)
+        check("says how to fix it", "--setup" in msg, True)
+
+
+def test_duplicate_camera_names():
+    """Two boxes, one nickname: NT has no coprocessor in a camera's path."""
+    print("\nduplicate_camera_names() - the flat namespace")
+    clean = [("pi-front", "AA", ["FL", "FR"]), ("pi-back", "BB", ["BL", "BR"])]
+    check("unique names are silent", pf.duplicate_camera_names(clean), {})
+
+    clash = [("pi-front", "AA", ["Front", "Left"]),
+             ("pi-back", "BB", ["Front", "Right"])]
+    got = pf.duplicate_camera_names(clash)
+    check("the collision is found", sorted(got), ["Front"])
+    check("both claimants are named", sorted(got.get("Front", [])),
+          ["pi-back", "pi-front"])
+    check("the innocent names are not flagged", "Left" in got, False)
+
+    noname = [("", "AA", ["Front"]), ("", "BB", ["Front"])]
+    check("falls back to the MAC when hostname is blank",
+          sorted(pf.duplicate_camera_names(noname).get("Front", [])), ["AA", "BB"])
+
+
 def test_non_interactive():
     """A piped or scheduled run must not print half a question."""
     print("\ninteractive() - nobody to ask")
@@ -344,6 +393,8 @@ if __name__ == "__main__":
                test_require_nt_names_the_right_interface,
                test_loopback_message,
                test_photon_absent_message,
+               test_second_pi,
+               test_duplicate_camera_names,
                test_absent_message_never_contradicts_itself,
                test_non_interactive):
         fn()
