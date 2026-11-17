@@ -569,6 +569,118 @@ def nt_subtables(inst, table, settle=1.5):
         sub.close()
 
 
+def photon_cameras(inst, settle=2.0):
+    """[(hostname, mac, [camera names])] - PhotonVision's OWN answer.
+
+    /photonvision/coprocessors/<MAC>/cameraNames is the coprocessor stating
+    what it has. Enumerating subtables is not the same question and gives a
+    worse answer, because subtables are whatever ANYONE has ever touched.
+    """
+    import time as _t
+    try:
+        import ntcore
+    except ImportError:
+        return []
+    sub = ntcore.MultiSubscriber(inst, ["/"])
+    try:
+        cop = inst.getTable("photonvision").getSubTable("coprocessors")
+        deadline = _t.time() + settle
+        while not cop.getSubTables() and _t.time() < deadline:
+            _t.sleep(0.1)
+        out = []
+        for mac in sorted(cop.getSubTables()):
+            t = cop.getSubTable(mac)
+            ns = t.getStringArrayTopic("cameraNames").subscribe([])
+            hs = t.getStringTopic("hostname").subscribe("")
+            try:
+                names = list(ns.get())
+                d2 = _t.time() + 1.0
+                while not names and _t.time() < d2:
+                    _t.sleep(0.05)
+                    names = list(ns.get())
+                out.append((hs.get(), mac, sorted(names)))
+            finally:
+                ns.close()
+                hs.close()
+        return out
+    finally:
+        sub.close()
+
+
+def photon_camera_tables(inst, settle=1.5):
+    """(real, leftover) camera-shaped subtables, told apart by what is in them.
+
+    FALLBACK, for a coprocessor too old to publish its own camera list.
+
+    Constructing a PhotonCamera PUBLISHES driverModeRequest, fpsLimitRequest
+    and pipelineIndexRequest under whatever name it was given, and nothing
+    ever removes them. One mistyped run therefore leaves a convincing
+    'left' sitting beside the real 'Left' for the life of the server, and
+    asking for the wrong one succeeds and then records nothing - a worse
+    failure than the clean error. The coprocessor publishes everything else:
+    heartbeat, cameraIntrinsics, hasTarget, fps. Measured on a working rig,
+    22 topics against exactly those three.
+
+    Deliberately NOT "whichever ones have data". A camera that exists and is
+    broken must still be listed, or the tool quietly records half a rig and
+    never says which half is missing. Whether data flows is warm-up's
+    question, and warm-up names the camera that fails it.
+    """
+    import time as _t
+    try:
+        import ntcore
+    except ImportError:
+        return (sorted(inst.getTable('photonvision').getSubTables()), [])
+    sub = ntcore.MultiSubscriber(inst, ["/"])
+    try:
+        deadline = _t.time() + settle
+        groups = {}
+        while _t.time() < deadline:
+            groups = {}
+            for t in inst.getTopics():
+                n = t.getName()
+                if not n.startswith("/photonvision/"):
+                    continue
+                parts = n[len("/photonvision/"):].split("/")
+                if len(parts) < 2 or not parts[0] or parts[0].startswith("."):
+                    continue
+                groups.setdefault(parts[0], set()).add(parts[1])
+            if groups:
+                break
+            _t.sleep(0.1)
+        real, leftover = [], []
+        for name, topics in groups.items():
+            if name == "coprocessors":
+                continue
+            if any(not x.endswith("Request") for x in topics):
+                real.append(name)
+            else:
+                leftover.append(name)
+        return (sorted(real), sorted(leftover))
+    finally:
+        sub.close()
+
+
+def discover_cameras(inst, settle=2.0):
+    """(names, leftovers, source) - what to record from, without being told.
+
+    A hardcoded default rots. calibrate_mount shipped with
+    "OV9281,OV9281 (1)" - the nicknames PhotonVision generates from the
+    sensor model - and they stopped being true the day the cameras were
+    renamed Left and Right, after which the tool's own default could not
+    pass its own check.
+    """
+    cops = photon_cameras(inst, settle)
+    named = sorted({n for _h, _m, ns in cops for n in ns})
+    real, leftover = photon_camera_tables(inst, 0.5)
+    if named:
+        return (named, [n for n in leftover + real if n not in named],
+                "the coprocessor's own cameraNames")
+    if real:
+        return (real, leftover, "the tables carrying coprocessor topics")
+    return ([], leftover, "nothing")
+
+
 def photon_absent_message(host, others, table="photonvision"):
     """Why /<table>/ is empty, naming every cause that fits the evidence.
 
@@ -697,10 +809,21 @@ if __name__ == "__main__":
             else:
                 tables = nt_top_level(inst)
                 if "photonvision" in tables:
-                    cams = sorted(n for n in
-                                  inst.getTable("photonvision").getSubTables())
-                    print("NetworkTables     %-14s :%-5d OK  - /photonvision/ %s"
-                          % (rio, NT_PORT, ", ".join(cams) if cams else "(no cameras yet)"))
+                    names, leftover, src = discover_cameras(inst)
+                    print("NetworkTables     %-14s :%-5d OK" % (rio, NT_PORT))
+                    for host, mac, ns in photon_cameras(inst, 0.5):
+                        print("  coprocessor %s (%s): %s"
+                              % (host or "?", mac, ", ".join(ns) if ns else "no cameras"))
+                    if names:
+                        print("  cameras: %s   [from %s]" % (", ".join(names), src))
+                    else:
+                        print("  NO CAMERAS - /photonvision/ exists but nothing is published under it")
+                        bad.append("cameras")
+                    if leftover:
+                        print("  leftover tables, NOT cameras: %s" % ", ".join(leftover))
+                        print("  Something once constructed a PhotonCamera with these names and"
+                              "\n  only the request topics remain. Asking for one of these"
+                              "\n  SUCCEEDS and then records nothing.")
                 else:
                     print(photon_absent_message("%s:%d" % (rio, NT_PORT),
                                                 [t for t in tables if t != "photonvision"]))

@@ -362,7 +362,18 @@ def record(path, seconds, host, names, gyro_topic=None, motion="spin"):
     inst.startClient4("mount-cal")
     inst.setServer(host, ntcore.NetworkTableInstance.kDefaultPort4)
     preflight.require_nt(inst, host)
-    time.sleep(1.5)          # let the topic list arrive
+    # No sleep here. There used to be one, and it could not have worked:
+    # an NT4 client that has not SUBSCRIBED is never told about a topic,
+    # so waiting longer returns the same empty list. preflight does the
+    # subscribing.
+    if not names:
+        names, leftover, src = preflight.discover_cameras(inst)
+        if not names:
+            sys.exit(preflight.photon_absent_message(host, []))
+        print("cameras (not given, read from %s): %s" % (src, ", ".join(names)))
+        if leftover:
+            print("  ignoring leftover tables that are not cameras: %s"
+                  % ", ".join(leftover))
     _check_cameras(inst, names)
     cams = {n: PhotonCamera(n) for n in names}
     _warmup(cams)
@@ -1023,8 +1034,11 @@ if __name__ == "__main__":
                     help="how long to record for")
     ap.add_argument("--host", default="photonvision.local",
                     help="the NetworkTables server - 'rio' on a robot. NOT the Pi: PhotonVision is an NT client there")
-    ap.add_argument("--cameras", default="OV9281,OV9281 (1)",
-                    help="comma-separated nicknames")
+    ap.add_argument("--cameras", default=None,
+                    help="comma-separated nicknames. Omit it and they are read "
+                         "from the coprocessor\'s own published list - the "
+                         "default used to be hardcoded and rotted the day the "
+                         "cameras were renamed")
     ap.add_argument("--forward", default=None, metavar="FILE",
                     help="a recording of one STRAIGHT drive, made with `record`. "
                          "Resolves the single shared unknown - where robot forward "
@@ -1051,7 +1065,7 @@ if __name__ == "__main__":
     preflight.add_team_argument(ap)
     a = ap.parse_args()
     a.host = preflight.resolve_host(a.host, a.team)
-    names = [c.strip() for c in a.cameras.split(",")]
+    names = [c.strip() for c in a.cameras.split(",")] if a.cameras else None
     if a.mode == "record":
         motion = a.motion
         if motion is None:
