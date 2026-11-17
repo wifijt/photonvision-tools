@@ -146,36 +146,123 @@ GYRO_HINTS = ("gyro", "yaw", "heading", "angle", "rotation", "pigeon", "imu",
               "navx", "theta")
 
 
+class _GyroReader:
+    """The robot's heading, whatever shape it is published in.
+
+    A bare double is what this tool first assumed, and it is not the common
+    case. AdvantageKit publishes heading as struct:Rotation2d, and
+    getDoubleTopic() on a struct topic returns its default forever. Measured
+    against a live robot: nan from the double subscriber while the raw topic
+    handed back 8 perfectly good bytes. The tool then printed "is not
+    publishing yet", which sends someone to look at robot code that is fine.
+
+    WPILib struct layouts, little-endian:
+        Rotation2d   double radians
+        Pose2d       double x, double y, double radians   (angle at byte 16)
+
+    Pose3d carries a quaternion rather than an angle and is not handled; pass
+    the Rotation2d topic instead of the pose.
+    """
+    OFFSETS = {"struct:Rotation2d": 0, "struct:Pose2d": 16}
+    NUMERIC = ("double", "float", "int", "int64")
+
+    def __init__(self, inst, name):
+        import struct as _s
+        self._s = _s
+        self.name = name
+        self._keep = None
+        self.kind = inst.getTopic(name).getTypeString() or ""
+        if not self.kind:
+            # Nothing has subscribed, so nothing has been announced and the
+            # type is unknown. See _gyro_candidates on why this is usually
+            # already done for us, and why relying on that would be luck.
+            try:
+                import ntcore
+                self._keep = ntcore.MultiSubscriber(inst, [name])
+                import time as _t
+                end = _t.time() + 1.0
+                while not self.kind and _t.time() < end:
+                    _t.sleep(0.05)
+                    self.kind = inst.getTopic(name).getTypeString() or ""
+            except Exception:
+                pass
+        self._off = self.OFFSETS.get(self.kind)
+        if self._off is None:
+            self._sub = inst.getDoubleTopic(name).subscribe(float("nan"))
+        else:
+            self._sub = inst.getRawTopic(name).subscribe(self.kind, b"")
+
+    def get(self):
+        if self._off is None:
+            return self._sub.get()
+        try:
+            b = bytes(self._sub.get())
+        except Exception:
+            return float("nan")
+        if len(b) < self._off + 8:
+            return float("nan")
+        return self._s.unpack_from("<d", b, self._off)[0]
+
+    def unreadable(self):
+        """A type this cannot turn into an angle, as opposed to a quiet one."""
+        return self._off is None and self.kind and self.kind not in self.NUMERIC
+
+    def describe(self):
+        if self._off is not None:
+            return "%s is %s - reading radians at byte %d" % (self.name, self.kind, self._off)
+        if self.unreadable():
+            return ("%s is %s, which cannot be read as an angle. If it is a pose, "
+                    "pass its Rotation2d topic instead." % (self.name, self.kind))
+        return "%s is %s" % (self.name, self.kind or "not announced by the server")
+
+
 def _gyro_candidates(inst):
-    """List NT number topics that look like a heading, so you can pick one.
+    """List NT topics that look like a heading, so you can pick one.
 
     There is no standard place for the gyro on NetworkTables - it is wherever
     the team's robot code happened to publish it. A default would be wrong on
     every robot but one, so print what is actually on the wire instead.
+
+    STRUCT TYPES ARE LISTED TOO. Restricting this to numbers was not a
+    simplification, it was a wrong answer: on an AdvantageKit robot the only
+    number matching the hints is YawVelocityRadPerSec, so this offered a RATE
+    where a heading was wanted while the actual heading - YawPosition,
+    struct:Rotation2d - was filtered out before anyone saw it. Offering a
+    rate is worse than offering nothing.
+
+    ORDERING. inst.getTopics() returns what this client has been TOLD about,
+    and NT4 tells a client only about what it has subscribed to. This works
+    because _check_cameras runs first and subscribes; measured, the topic
+    list then survives that subscriber being closed. Call this before it and
+    it will find nothing.
     """
     found = []
     for t in inst.getTopics():
         name = t.getName()
-        if t.getTypeString() not in ("double", "float", "int", "int64"):
+        ty = t.getTypeString()
+        if ty not in _GyroReader.NUMERIC and ty not in _GyroReader.OFFSETS:
             continue
         if not any(h in name.lower() for h in GYRO_HINTS):
             continue
         try:
-            v = inst.getDoubleTopic(name).subscribe(float("nan")).get()
+            v = _GyroReader(inst, name).get()
         except Exception:
             v = float("nan")
-        found.append((name, t.getTypeString(), v))
-    print("\nNT number topics that look like a heading:")
+        rate = "velocity" in name.lower() or "persec" in name.lower()
+        found.append((name, ty, v, rate))
+    print("\nNT topics that look like a heading:")
     if not found:
         print("  (none). Either robot code is not publishing one, or it is not")
         print("  named anything like gyro/yaw/heading. Check the PhotonVision or")
         print("  dashboard NT tree, then pass --gyro-topic /Full/Topic/Name.")
         return
-    for name, ty, v in sorted(found):
-        print("  %-52s %-7s %s" % (name, ty, "nan" if v != v else "%.3f" % v))
+    for name, ty, v, rate in sorted(found):
+        print("  %-52s %-18s %-8s%s"
+              % (name, ty, "nan" if v != v else "%.3f" % v,
+                 "   <- a RATE, not a heading" if rate else ""))
     print("  Pick the one that is the ROBOT's heading - not a module angle, not")
-    print("  a setpoint - and pass it as --gyro-topic. Rotate the robot by hand")
-    print("  and watch which one moves if you are not sure.")
+    print("  a setpoint, not a rate - and pass it as --gyro-topic. Rotate the")
+    print("  robot by hand and watch which one moves if you are not sure.")
 
 
 def _gyro_track(camyaw_unwrapped, graw):
@@ -379,12 +466,21 @@ def record(path, seconds, host, names, gyro_topic=None, motion="spin"):
     _warmup(cams)
     gyro = None
     if gyro_topic:
-        gyro = inst.getDoubleTopic(gyro_topic).subscribe(float("nan"))
-        if gyro.get() != gyro.get():
+        gyro = _GyroReader(inst, gyro_topic)
+        if gyro.unreadable():
+            # Distinguished from a quiet topic on purpose. "Not publishing"
+            # for a topic that is publishing perfectly well, in a type we
+            # did not open, is an accusation aimed at the wrong machine.
+            print("!! %s" % gyro.describe())
+            print("   Recording anyway; the gyro column will be nan.")
+            _gyro_candidates(inst)
+        elif gyro.get() != gyro.get():
             print("!! %s is not publishing yet - recording anyway, but the gyro"
                   % gyro_topic)
             print("   column will be nan and the gyro checks will be skipped.")
             _gyro_candidates(inst)
+        else:
+            print("gyro: %s" % gyro.describe())
     else:
         _gyro_candidates(inst)
         print("\n  (recording WITHOUT a gyro column - pass --gyro-topic to get")
