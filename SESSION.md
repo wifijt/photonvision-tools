@@ -9,84 +9,6 @@ else here exists to make that number trustworthy.
 
 ---
 
-## State of play — Thursday 2026-11-19, at school, with the robot
-
-Measured on the bench on 16 Nov. Read this before step 0.
-
-### Fix this first, or the robot is blind all evening
-
-The deployed code asks PhotonVision for cameras named `left` and `right`.
-They are published as `Left` and `Right`. NT paths are case-sensitive, so the
-robot's vision has never worked — and it fails **silently**, because asking
-for a camera that does not exist is not an error in photonlibpy. It reports
-no targets, exactly as it would with no tags in the room.
-
-```
-PlankBot2026, branch betterVisionIntegration, 2b2c8e2, built 2026-01-17
-frc/robot/subsystems/vision/VisionConstants    camera0Name="left"  camera1Name="right"
-frc/robot/Constants$Vision                     "left", "right"
-frc/robot/subsystems/oldVision/CameraConstants "left", "right"
-```
-
-Change them, deploy, and check **one topic**: `/photonvision/Left/pipelineIndexRequest`
-appears on NetworkTables. That topic existing is proof the robot is asking for
-a camera that is really there. Until then `preflight.py` lists `left`/`right`
-under "leftover tables, NOT cameras".
-
-### Then the gate: multi-tag solves
-
-On the bench both cameras produced ~246 results per 3 s and **zero** multi-tag.
-Every row of a spin recording comes from `multitagResult`, so without them a
-60 s record writes an empty file. Build the field and confirm multi-tag in the
-warm-up before anything drives.
-
-### Then step 5, both motions
-
-Spin **and** straight drive. `--forward` is what turns the relative answers
-into a full `robotToCamera` per camera; one without the other is not the
-number you came for.
-
-Gyro topic is `/AdvantageKit/Drive/Gyro/YawPosition`, type `struct:Rotation2d`.
-Not `/SmartDashboard/Gyro`, which does not exist, and not
-`YawVelocityRadPerSec`, which is a rate.
-
-### Not on the plan
-
-**Camera calibration is done** — both at 1280x800 on 16 Nov, Left 131
-snapshots, Right 100. If a camera is re-seated or re-aimed that changes, and
-`SETUP.md` has the ChArUco procedure.
-
-### What to compare the solve against
-
-The robot's own transforms. Every figure is an exact 1/16 inch, so these are
-tape-measure numbers, not calibration:
-
-| | x | y | z | pitch | yaw |
-|---|---|---|---|---|---|
-| `robotToCamera0` "left"  | 13 1/4" | +10 3/16" | 10 15/16" | +5° | −15° |
-| `robotToCamera1` "right" | 14 1/8" | −10 9/16" | 10 3/4"   | +5° | +15° |
-
-Left and right disagree by 22 mm in x, 9.5 mm in |y| and 4.8 mm in z — either
-the mounts are genuinely asymmetric or that is slop, and the solve is what
-tells you which.
-
-The **relative yaw** is the one figure with independent support: this tool
-measured −30.4° between two cameras, cross-checked at −29.0/−29.3° by an
-unrelated method, and the typed values are 30° apart. The absolutes are what
-calibration is for — a tape cannot reach the optical centre, which sits behind
-the lens.
-
-### Two things that will bite if nobody says them
-
-**The roboRIO.** If the rio going to school is the one reconfigured on 16 Nov,
-its `eth0` is now **static 10.54.59.2**, not DHCP. That is fine beside a radio
-and means it comes up at `.2` whether or not anything is handing out
-addresses. Original config backed up on it at `/home/admin/ni-rt.ini.bak-preStatic`.
-
-**The layout.** The robot loads `AprilTagFields.kDefaultField` — the official
-field, not a surveyed one. Right on a real field, wrong for tags on stands.
-Check which layout the Pi has imported before trusting any pose.
-
 ## 0. Laptops — do this first, all of them
 
 A stale clone does not error. It produces **wrong numbers quietly**, which is
@@ -254,8 +176,7 @@ PhotonVision → **Settings → Import Field**. No terminal.
 > **This has to come before the spin, and it is a hard dependency rather than a
 > preference.** photontune reads the camera's OWN intrinsics to get `fx` for
 > the blur budget, and refuses with "no calibration for the active resolution"
-> without them — calibration is not on this plan because both cameras were
-> done on 16 Nov; see `SETUP.md` if one is re-seated. It scores each trial on
+> without them — the ChArUco procedure is in `SETUP.md`. It scores each trial on
 > the **multi-tag solve rate**, which needs the layout loaded — step 3. And
 > the spin in step 5 is
 > only as good as the detections underneath it, so tuning exposure after
@@ -456,7 +377,9 @@ None of these produce an error. All of them produce wrong answers.
 
 ## If you only get one thing done
 
-Fix the camera names and prove it with `/photonvision/Left/pipelineIndexRequest`.
-The robot has been blind since January and everything here is downstream of it
-being able to see at all. A measured `robotToCamera` on a robot that never
-reads a camera is a precise number nobody can use.
+Make sure the robot is actually reading the cameras it thinks it is. Every
+step here is downstream of that, and it fails silently — a `PhotonCamera`
+asked for a name the coprocessor does not have reports no targets, exactly as
+it would with no tags in the room. `preflight.py` names the real cameras and
+flags the impostors. A measured `robotToCamera` on a robot that never reads a
+camera is a precise number nobody can use.
