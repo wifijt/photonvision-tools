@@ -81,9 +81,12 @@ OPTIONS
     seconds                how long to record for  (default 60.0)
     --host                 the NetworkTables server - 'rio' on a robot. NOT the
                            Pi: PhotonVision is an NT client there  (default
+                           'pi', which resolves to $FRC_PI, else
                            photonvision.local)
-    --cameras              comma-separated nicknames  (default OV9281,OV9281
-                           (1))
+    --cameras              comma-separated nicknames. Omit it and they are read
+                           from the coprocessor's own published list, which is
+                           what you want - the default used to be hardcoded and
+                           rotted the day the cameras were renamed.
     --forward FILE         a recording of one STRAIGHT drive, made with
                            `record`. Resolves the single shared unknown - where
                            robot forward points - and turns the relative
